@@ -15,6 +15,15 @@ An idle tower defense game in sumi-e ink. You are the Asura, standing in the cen
   - Each move's impact frame is timed to the core's swing, using the attack phase and approach speed. Crits get a slowed impact frame and a red ink burst. Far targets are struck by a flying ki crescent.
   - Signatures: Wrath Burst is a leaping spin into a ground slam, with the shockwave held to land on the slam. Storm is a rapid flurry. Six Arms is a fan of red ghost palms.
   - Animation speed follows attack speed, capped at about 3 full moves per second (5 during Storm); faster swings are blended in as echo strikes. The Reduced effects setting drops the spins, ghosts and ribbons. An adaptive governor sheds secondary effects on slow devices.
+- **Ability effects** (`powers.js`): when Storm triggers, a crackling red painted-lightning cage builds around the Asura for about half a second, then forks out to the nearest foes with red ink flashes where it lands. While Storm lasts, a red aura crackles around him and every chain hit sends a forked bolt. Blood Beads orbit on a tilted, bobbing plane. They pass in front of and behind him, scaling and shading with depth, and leave glossy highlights and faint red trails. They spin up when cast and spin down and fade when the ability ends.
+- **Themed stages** (`stage.js`, `assets/themes/`): each 10-wave block is painted after the boss waiting at its end:
+  - Oni Warlord: volcanic hell gate.
+  - Tengu King: misty peaks.
+  - Shogun: castle courtyard.
+  - Orochi: swamp delta.
+  - Onryō Queen: haunted shrine at night.
+
+  An RNG seeded by the block flips and frames the backdrop and scatters painted props around the edges, never in the combat circle. It also varies the ground and picks the ambient particles: embers and ash, feathers, petals, mist, fireflies, rain or ghost wisps. So each block is unique, but the same after a reload. After the boss dies, the new scene bleeds in with an ink wash and a brush-lettered area banner (e.g. “Gate of Ashes”). Each scene is baked once per block into an offscreen canvas, and particles are pooled and capped; Reduced effects turns both the particles and the transition off. Theme art is about 350 KB per theme. It is lazy-loaded (the current and next themes only), and the service worker caches it in the background so every stage works offline. To rebuild from the painted sources: `python3 tools/build_themes.py <src dir>`.
 - Saves to `localStorage` every 5 s and when you leave; offline progress up to 8 h (more with Meditation).
 - No build step needed to host: the compiled `pkg/` and the art atlases are committed. To rebuild the core: `./build.sh` (needs Rust, the `wasm32-unknown-unknown` target and `wasm-pack`). To re-pack the atlases from the painted sources: `python3 tools/build_atlas.py <src dir>` (needs numpy, scipy, Pillow).
 

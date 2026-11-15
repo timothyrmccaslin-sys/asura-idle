@@ -1,6 +1,8 @@
 import { drawFigure, drawAsura as drawAsuraFig, brush } from './figures.js';
 import { loadArt, makeFrame, flashOf as paintedFlash, tinted, unwrapRing } from './art.js';
 import { createAsura } from './asura.js';
+import { createStage } from './stage.js';
+import { createPowers } from './powers.js';
 // Ink renderer — draws the state exported by the Rust/wasm core onto a canvas
 // in a sumi-e style. Pure presentation: no game rules live here.
 
@@ -60,6 +62,13 @@ export function createRenderer(canvas) {
   // painted art (falls back to the procedural figures until the atlases load)
   let art = null, artCache = new Map();
   const anim = createAsura();
+  const stage = createStage();
+  const powers = createPowers();
+  powers.setHooks({
+    impact: (x, y) => { stamp(x, y, 0.2, true, 0.3); stamp(x, y, 0.12, true, 5, true); },
+    shake: (v) => { if (!reduced) shake = Math.max(shake, v); },
+  });
+  let splatSet = false;
   const stamps = [];   // painted splatter bursts
   const delayed = [];  // events held back to land on an animation beat
   loadArt().then((a) => { art = a; artCache = new Map(); }).catch((e) => console.warn(e));
@@ -80,6 +89,8 @@ export function createRenderer(canvas) {
     sprites = new Map();
     artCache = new Map();
     bgLive = null;
+    splatSet = false;
+    stage.setView({ W, H, cx, cy, scale, dpr });
     prewarm();
   }
 
@@ -366,7 +377,7 @@ export function createRenderer(canvas) {
     if (!bg) return;
     if (!bgLive || bgLive.width !== W || bgLive.height !== H) { bgLive = document.createElement('canvas'); bgLive.width = W; bgLive.height = H; full = true; }
     const g = bgLive.getContext('2d');
-    if (full) { g.setTransform(1, 0, 0, 1, 0, 0); g.globalAlpha = 1; g.drawImage(bg, 0, 0); paintScenery(g, reduced ? 0 : time); }
+    if (full) { g.setTransform(1, 0, 0, 1, 0, 0); g.globalAlpha = 1; if (stage.scene) g.drawImage(stage.scene, 0, 0); else { g.drawImage(bg, 0, 0); paintScenery(g, reduced ? 0 : time); } }
     for (const st of stamps) if (st.ground && (full || !st.baked)) { drawStampOn(g, st, Math.min(1, st.life / 3) * (st.red ? 0.42 : 0.36), 1); st.baked = true; }
   }
   function drawStamp(s, a, grow) { drawStampOn(ctx, s, a, grow); }
@@ -460,7 +471,9 @@ export function createRenderer(canvas) {
 
   function drawAsura(f, t) {
     if (art) {
+      powers.drawBack(ctx);
       anim.draw(ctx, lastDt, getPose, strokeTex, f);
+      powers.drawFront(ctx);
       return;
     }
     const atk = f[2], face = f[3] || 1;
@@ -471,6 +484,7 @@ export function createRenderer(canvas) {
     ctx.save(); ctx.translate(cx, cy - 2 * dpr); ctx.scale(face, 1);
     ctx.drawImage(s.c, -s.ox, -s.oy);
     ctx.restore();
+    powers.drawFront(ctx);
   }
 
   // ------------------------------------------------------------ effects
@@ -535,7 +549,8 @@ export function createRenderer(canvas) {
           if (!reduced) shake = 10;
           break;
         case EV.CHAIN:
-          bolts.push({ x, y, life: 0.2, seed: (R() * 1e9) | 0 });
+          powers.onChain(x, y);
+          if (art) stamp(x, y, 0.14, true, 0.25);
           break;
         case EV.HURT:
           hurtFlash = Math.min(1, hurtFlash + 0.35);
@@ -588,6 +603,12 @@ export function createRenderer(canvas) {
     }
     lastF = f;
     if (art) warmArt(); else pumpPrewarm();
+    if (art && !splatSet) { stage.setSplat(stampTex(false)); splatSet = true; }
+    if (stage.update(f[4], dtReal, reduced ? 'reduced' : lite ? 'lite' : 'full')) {
+      for (let i = stamps.length - 1; i >= 0; i--) if (stamps[i].ground) stamps.splice(i, 1);
+      decals.length = 0; bakeT = 0;
+    }
+    { const p = anim.pose; powers.update(dt, f, en, { X: cx, Y: cy, H: asuraH(), scale, SQ, dpr, reduced, lite, dx: art && p ? p.dx || 0 : 0 }); }
     const t = time;
     ctx.setTransform(1, 0, 0, 1, 0, 0);
     let sx = 0, sy = 0;
@@ -607,7 +628,10 @@ export function createRenderer(canvas) {
       ctx.setTransform(1, 0, 0, 1, sx, sy);
     }
     if (art && bgLive) ctx.drawImage(bgLive, 0, 0); // scenery + stains pre-baked
+    else if (stage.scene) ctx.drawImage(stage.scene, 0, 0);
     else { ctx.drawImage(bg, 0, 0); paintScenery(ctx, reduced ? 0 : t); }
+    if (stage.transitioning) { stage.drawTransition(ctx); ctx.setTransform(1, 0, 0, 1, sx, sy); }
+    stage.drawAmbient(ctx, true); ctx.setTransform(1, 0, 0, 1, sx, sy);
 
     // ground decals
     for (let i = decals.length - 1; i >= 0; i--) {
@@ -621,23 +645,6 @@ export function createRenderer(canvas) {
 
     // range circle
     brushRing(f[1], reduced ? 0 : t);
-    // storm aura
-    if (f[7] > 0) {
-      ctx.save(); ctx.translate(cx, cy);
-      const pulse = 0.5 + Math.sin(t * 20) * 0.5;
-      ctx.strokeStyle = `rgba(22,20,18,${0.25 + pulse * 0.25})`; ctx.lineWidth = 2 * dpr;
-      ctx.beginPath(); ctx.ellipse(0, -0.12 * scale, 0.14 * scale, 0.16 * scale, 0, 0, Math.PI * 2); ctx.stroke();
-      ctx.restore();
-    }
-    if (f[8] > 0) { // blood beads — red mala circling
-      ctx.save(); ctx.translate(cx, cy - 0.1 * scale);
-      for (let i = 0; i < 12; i++) {
-        const a = (i / 12) * Math.PI * 2 + t * (reduced ? 0 : 1.2);
-        const bx = Math.cos(a) * 0.17 * scale, by = Math.sin(a) * 0.17 * scale * SQ;
-        circ(ctx, bx, by, 3.6 * dpr, RED); circ(ctx, bx - dpr, by - dpr, 1.1 * dpr, 'rgba(255,220,220,.8)');
-      }
-      ctx.restore();
-    }
 
     // dissolving corpses: the painting tears into strips and fades into the paper
     for (let i = corpses.length - 1; i >= 0; i--) {
@@ -776,18 +783,6 @@ export function createRenderer(canvas) {
       ctx.moveTo(-L, 0); ctx.quadraticCurveTo(0, -L * 0.45 * (0.6 + p), L, 0); ctx.quadraticCurveTo(0, -L * 0.15, -L, 0);
       ctx.fill(); ctx.restore();
     }
-    // lightning
-    for (let i = bolts.length - 1; i >= 0; i--) {
-      const b = bolts[i]; b.life -= dt;
-      if (b.life <= 0) { bolts.splice(i, 1); continue; }
-      const r = rng(b.seed + ((t * 30) | 0));
-      const x0 = cx, y0 = cy - 0.3 * scale, x1 = toX(b.x), y1 = toY(b.y) - 0.07 * scale;
-      for (const [w, c] of [[4, `rgba(22,20,18,${b.life * 4})`], [1.4, `rgba(210,58,58,${b.life * 5})`]]) {
-        ctx.strokeStyle = c; ctx.lineWidth = w * dpr; ctx.beginPath(); ctx.moveTo(x0, y0);
-        for (let k = 1; k < 8; k++) { const q = k / 8; ctx.lineTo(x0 + (x1 - x0) * q + (r() - 0.5) * 16 * dpr, y0 + (y1 - y0) * q + (r() - 0.5) * 16 * dpr); }
-        ctx.lineTo(x1, y1); ctx.stroke();
-      }
-    }
     // particles
     for (let i = parts.length - 1; i >= 0; i--) {
       const p = parts[i]; p.life -= dt;
@@ -808,6 +803,7 @@ export function createRenderer(canvas) {
       ctx.beginPath(); ctx.ellipse(toX(p.x), toY(p.y) - p.z * scale * 0.4 - 0.06 * scale, p.r * 1.8, p.r * 0.8, Math.atan2(p.vy * SQ - p.vz * 0.4, p.vx), 0, Math.PI * 2); ctx.fill();
     }
     ctx.setTransform(1, 0, 0, 1, sx, sy); ctx.globalAlpha = 1;
+    stage.drawAmbient(ctx, false); ctx.setTransform(1, 0, 0, 1, sx, sy);
     // floating numbers
     ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
     for (let i = texts.length - 1; i >= 0; i--) {
@@ -837,6 +833,8 @@ export function createRenderer(canvas) {
       ctx.fillStyle = `rgba(179,32,42,${healFlash * 0.12})`; ctx.fillRect(0, 0, W, H);
       healFlash = Math.max(0, healFlash - dt * 1.5);
     }
+    stage.drawBanner(ctx, dtReal);
+    ctx.setTransform(1, 0, 0, 1, 0, 0); ctx.globalAlpha = 1;
   }
 
   return {
@@ -846,5 +844,7 @@ export function createRenderer(canvas) {
     get quality() { return reduced ? 'reduced' : lite ? 'lite' : 'full'; },
     get anim() { return anim; },
     get painted() { return !!art; },
+    get stage() { return stage; },
+    get powers() { return powers; },
   };
 }

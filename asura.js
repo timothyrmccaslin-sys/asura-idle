@@ -488,5 +488,5 @@ export function createAsura() {
     start(name, D || M.base, now, tx, ty);
     if (name === 'slam') cur.locked = true;
   }
-  return { update, draw, onAttack, onCrit, castSlam, debugPlay, get now() { return now; }, get busy() { return !!cur; }, stats, MOVES };
+  return { update, draw, onAttack, onCrit, castSlam, debugPlay, get now() { return now; }, get busy() { return !!cur; }, get pose() { return lastSt; }, stats, MOVES };
 }
