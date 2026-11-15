@@ -219,19 +219,6 @@ export function createWater() {
       ctx.fillStyle = BLU2(0.95 * al); ctx.beginPath(); ctx.ellipse(p.x, p.y, p.r * sp, p.r * 0.85, ang, 0, TAU); ctx.fill();
       ctx.fillStyle = INKC(0.6 * al); ctx.beginPath(); ctx.arc(p.x + Math.cos(ang) * p.r * 0.4, p.y + Math.sin(ang) * p.r * 0.4, p.r * 0.45, 0, TAU); ctx.fill();
     }
-    // Blue Lotus shield: broken petals of blue wash circling her body
-    if (lotusAmt > 0.01) {
-      const cx = S.X + S.dx * 0.6, cy = S.Y - S.H * 0.45, rx = S.H * 0.46, ry = S.H * 0.6;
-      const n = S.reduced ? 4 : 7;
-      for (let i = 0; i < n; i++) {
-        const a0 = now * 0.9 + (i / n) * TAU, len = 0.55 + 0.25 * Math.sin(i * 1.7 + now);
-        for (const [w, col] of [[S.H * 0.05, BLU(0.16 * lotusAmt)], [S.H * 0.012, BLU2(0.55 * lotusAmt)]]) {
-          ctx.beginPath();
-          for (let j = 0; j <= 10; j++) { const a = a0 + len * (j / 10); const X = cx + Math.cos(a) * rx, Y = cy + Math.sin(a) * ry; if (j) ctx.lineTo(X, Y); else ctx.moveTo(X, Y); }
-          ctx.strokeStyle = col; ctx.lineWidth = w; ctx.stroke();
-        }
-      }
-    }
     // healing: blue motes rising off her while the rain falls
     if (rainAmt > 0.05 && !S.reduced) {
       for (let i = 0; i < (S.lite ? 4 : 9); i++) {

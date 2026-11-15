@@ -337,7 +337,7 @@ export function createPowers(opts = {}) {
     if (!front) {
       stepBeadFx(o);
       // red ink wash on the ground under the orbit
-      if (beadAmt > 0.01) {
+      if (beadAmt > 0.01 && !opts.blue) { // the Daeva shows only her beads
         const tex = wash(), wr = o.rx * 1.25;
         ctx.save(); ctx.globalAlpha = (red ? 0.5 : 0.85) * beadAmt * (0.85 + 0.15 * Math.sin(now * 2.3));
         ctx.translate(S.X, S.Y); ctx.scale(1, Math.min(0.6, S.SQ * 1.05)); ctx.rotate(now * 0.15);
