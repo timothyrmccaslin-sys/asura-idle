@@ -1,0 +1,23 @@
+{
+ "ink-road": {
+  "bpm": 84,
+  "loopStart": 0.5,
+  "loopLength": 45.714285714285715,
+  "loopSamples": 2016000,
+  "rate": 44100
+ },
+ "willow-rain": {
+  "bpm": 78,
+  "loopStart": 0.5,
+  "loopLength": 49.23077097505669,
+  "loopSamples": 2171077,
+  "rate": 44100
+ },
+ "oni-drums": {
+  "bpm": 92,
+  "loopStart": 0.5,
+  "loopLength": 41.73913832199546,
+  "loopSamples": 1840696,
+  "rate": 44100
+ }
+}

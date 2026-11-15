@@ -299,3 +299,8 @@ body.daeva .coin.bead .val, body.daeva #reb-gain { color: #b3202a; }
   content: ''; position: absolute; left: 12%; right: 8%; top: 0.1em; height: 0.1em;
   background: currentColor; border-radius: 60% 40% 55% 45% / 70% 50% 60% 40%; transform: rotate(-5deg); pointer-events: none;
 }
+
+.range { display: grid; grid-template-columns: auto 1fr 3.2em; align-items: center; gap: 10px; min-height: 36px; font-size: 15px; }
+.range input { width: 100%; accent-color: var(--ink); min-height: 28px; }
+.range input:disabled { opacity: .4; }
+.range-val { font-size: 13px; color: var(--ink-3); text-align: right; }

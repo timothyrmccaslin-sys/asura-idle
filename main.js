@@ -3,11 +3,12 @@
 import init, { Game } from './pkg/asura_core.js';
 import { createRenderer, fmt } from './render.js';
 import { macronHTML } from './macron.js';
+import { createMusic } from './music.js';
 
 const SAVE_KEY = 'asura-idle-save-v1';
 const PREFS_KEY = 'asura-idle-prefs-v1';
 const AUTOSAVE_MS = 5000;
-const APP_VERSION = '3.3.2'; // keep in step with VERSION in sw.js
+const APP_VERSION = '3.4.0'; // keep in step with VERSION in sw.js
 
 const UPS = {
   damage:   { name: 'Wrath',        desc: 'Raw striking power. Doubles every 25 levels.', f: (v) => fmt(v) },
@@ -57,7 +58,7 @@ let ABS = CHARS.asura.abs, curChar = '';
 const BOSSES = { 8: 'Oni Warlord', 9: 'Tengu King', 10: 'The Shogun', 11: 'Orochi', 12: 'Onryō Queen' };
 
 const $ = (id) => document.getElementById(id);
-const prefs = Object.assign({ buy: 1, fx: false, nums: true, intro: false }, safeJSON(localStorage.getItem(PREFS_KEY)) || {});
+const prefs = Object.assign({ buy: 1, fx: false, nums: true, intro: false, music: true, vol: 0.6 }, safeJSON(localStorage.getItem(PREFS_KEY)) || {});
 function safeJSON(s) { try { return s ? JSON.parse(s) : null; } catch { return null; } }
 function savePrefs() { try { localStorage.setItem(PREFS_KEY, JSON.stringify(prefs)); } catch {} }
 function dur(sec) {
@@ -66,7 +67,7 @@ function dur(sec) {
   return h ? `${h}h ${m}m` : m ? `${m}m ${s}s` : `${s}s`;
 }
 
-let game, renderer, ui = null;
+let game, renderer, ui = null, music = null;
 
 function save() {
   if (!game) return;
@@ -163,6 +164,12 @@ function buildUI() {
   $('opt-fx').addEventListener('change', (e) => { prefs.fx = e.target.checked; savePrefs(); renderer.setReduced(prefs.fx); });
   $('opt-nums').checked = prefs.nums;
   $('opt-nums').addEventListener('change', (e) => { prefs.nums = e.target.checked; savePrefs(); renderer.setNumbers(prefs.nums); });
+  $('opt-music').checked = prefs.music;
+  $('opt-music').addEventListener('change', (e) => { prefs.music = e.target.checked; savePrefs(); music.setEnabled(prefs.music); $('opt-vol').disabled = !prefs.music; });
+  $('opt-vol').value = Math.round(prefs.vol * 100); $('opt-vol').disabled = !prefs.music;
+  $('opt-vol').addEventListener('input', (e) => { prefs.vol = +e.target.value / 100; music.setVolume(prefs.vol); $('vol-val').textContent = e.target.value + '%'; });
+  $('opt-vol').addEventListener('change', savePrefs);
+  $('vol-val').textContent = Math.round(prefs.vol * 100) + '%';
   $('save-btn').addEventListener('click', () => { save(); toast('Saved to this browser.'); });
   $('export-btn').addEventListener('click', doExport);
   $('import-btn').addEventListener('click', doImport);
@@ -373,6 +380,7 @@ function frame(now) {
   const ev = game.drain_events();
   if (ev.length) { renderer.handle(ev); onEvents(ev); }
   const f = game.frame();
+  music.setWave(f[4] | 0);
   renderer.draw(f, game.enemies(), Math.min((now - (frame.prev || now)) / 1000, 0.1));
   frame.prev = now;
   $('hp-fill').style.width = (f[0] * 100).toFixed(1) + '%';
@@ -460,6 +468,7 @@ async function main() {
   }
   game = new Game(Math.floor(Math.random() * 2 ** 31));
   renderer = createRenderer($('arena'));
+  music = createMusic({ enabled: prefs.music, volume: prefs.vol });
   renderer.setReduced(prefs.fx); renderer.setNumbers(prefs.nums);
   buildUI();
   setupPWA();
@@ -498,7 +507,7 @@ async function main() {
   window.addEventListener('beforeunload', save);
 
   // test/debug handle (no effect on play)
-  window.__asura = { game, save, refresh, SAVE_KEY, get renderer() { return renderer; } };
+  window.__asura = { game, save, refresh, SAVE_KEY, get renderer() { return renderer; }, get music() { return music; } };
   requestAnimationFrame((t) => { last = t; frame.prev = t; frame(t); });
 }
 
