@@ -1,0 +1,24 @@
+[package]
+name = "asura_core"
+version = "1.0.0"
+edition = "2021"
+description = "Asura Idle game core simulation (Rust -> WebAssembly)"
+license = "MIT"
+repository = "https://github.com/timothyrmccaslin-sys/asura-idle"
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+wasm-bindgen = "0.2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+[profile.release]
+opt-level = "s"
+lto = true
+codegen-units = 1
+panic = "abort"
+
+[package.metadata.wasm-pack.profile.release]
+wasm-opt = ["-Os"]

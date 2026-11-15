@@ -1,0 +1,123 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content">
+<title>Asura — Wrath Incarnate · Idle Defense</title>
+<meta name="description" content="An idle tower defense game in sumi-e ink. You are the Asura; ninjas, samurai, oni and tengu come from every direction. Built in Rust + WebAssembly. Saves in your browser.">
+<meta name="theme-color" content="#ece6d8">
+<link rel="icon" href="assets/icon-192.png">
+<link rel="apple-touch-icon" href="assets/icon-192.png">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="preload" href="fonts/permanentmarker.woff2" as="font" type="font/woff2" crossorigin>
+<link rel="preload" href="fonts/patrickhandsc.woff2" as="font" type="font/woff2" crossorigin>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<div class="paper" aria-hidden="true"></div>
+
+<header class="top">
+  <div class="brand">
+    <h1>Asura</h1>
+    <span class="seal" aria-hidden="true">修羅</span>
+    <p class="sub">Wrath Incarnate <span class="dash">· Idle Defense</span></p>
+  </div>
+  <div class="purse">
+    <div class="coin" title="Souls"><span class="lbl">Souls</span><span id="souls" class="val">0</span><span id="sps" class="rate"></span></div>
+    <div class="coin bead" title="Prayer beads"><span class="lbl"><i class="bead-dot"></i>Beads</span><span id="beads" class="val">0</span></div>
+  </div>
+</header>
+
+<main class="layout">
+  <section class="arena-col">
+    <div class="panel arena-panel">
+      <div class="panel-label"><span id="wave-label">— Wave 1 —</span></div>
+      <div class="arena-box" id="arena-box">
+        <canvas id="arena" aria-label="Battlefield: the Asura in the centre, enemies approaching from every side"></canvas>
+        <div class="hud-top">
+          <div class="wave-prog"><div id="wave-fill"></div></div>
+          <button id="auto-btn" class="chip on" aria-pressed="true" title="Advance to the next wave automatically">Auto ▸</button>
+        </div>
+        <div class="hud-bottom">
+          <div class="hp"><div id="hp-fill"></div><span id="hp-text">100 / 100</span></div>
+        </div>
+        <div id="banner" class="banner" hidden></div>
+        <div id="loading" class="loading">Grinding ink…</div>
+      </div>
+    </div>
+    <div class="abilities" id="abilities"></div>
+  </section>
+
+  <section class="panel side">
+    <nav class="tabs" role="tablist">
+      <button role="tab" class="tab active" data-tab="up" aria-selected="true">Upgrades</button>
+      <button role="tab" class="tab" data-tab="rebirth" aria-selected="false">Rebirth</button>
+      <button role="tab" class="tab" data-tab="scroll" aria-selected="false">Scroll</button>
+    </nav>
+
+    <div class="tab-body" data-body="up">
+      <div class="buy-row">
+        <span class="mini-label">— Buy —</span>
+        <div class="seg" id="buy-mult">
+          <button data-m="1" class="on">×1</button><button data-m="10">×10</button><button data-m="25">×25</button><button data-m="-1">Max</button>
+        </div>
+      </div>
+      <div id="up-list" class="cards"></div>
+    </div>
+
+    <div class="tab-body" data-body="rebirth" hidden>
+      <div class="rebirth-box">
+        <div class="panel-label inline">— Reincarnation —</div>
+        <p class="flav">Lay down this life. Every soul you reaped is strung onto the mala as a red prayer bead, and the beads remember.</p>
+        <div class="reb-stats">
+          <div><span class="mini-label">Best wave this life</span><b id="reb-wave">1</b></div>
+          <div><span class="mini-label">Beads on rebirth</span><b id="reb-gain" class="red">0</b></div>
+          <div><span class="mini-label">Lifetime beads</span><b id="reb-life">0</b></div>
+        </div>
+        <p class="note" id="reb-note">Reach wave 30 to be reborn. Each lifetime bead adds +4% damage and +2% souls, forever.</p>
+        <button id="rebirth-btn" class="big-btn" disabled>Be Reborn</button>
+      </div>
+      <div class="panel-label inline">— Prayer Bead Shrine —</div>
+      <div id="shop-list" class="cards"></div>
+    </div>
+
+    <div class="tab-body" data-body="scroll" hidden>
+      <div class="panel-label inline">— Asura Stats —</div>
+      <dl id="stat-list" class="stats"></dl>
+      <div class="panel-label inline">— Options —</div>
+      <div class="opts">
+        <label class="toggle"><input type="checkbox" id="opt-autocast"> <span>Auto-cast abilities</span></label>
+        <label class="toggle"><input type="checkbox" id="opt-fx"> <span>Reduced effects</span></label>
+        <label class="toggle"><input type="checkbox" id="opt-nums" checked> <span>Damage numbers</span></label>
+      </div>
+      <div class="panel-label inline">— Save Scroll —</div>
+      <p class="note">Saves to this browser every 5 seconds and when you leave. <span id="last-saved"></span></p>
+      <div class="btn-row">
+        <button id="save-btn" class="btn">Save now</button>
+        <button id="export-btn" class="btn">Export</button>
+        <button id="import-btn" class="btn">Import</button>
+        <button id="reset-btn" class="btn danger">Hard reset</button>
+      </div>
+      <div class="panel-label inline">— Character Sheet —</div>
+      <figure class="sheet">
+        <img src="assets/character-sheet.jpg" alt="Asura character exploration sheet: monochrome ink, red beads and sash" loading="lazy" width="640" height="953">
+        <figcaption>“I am the storm” — before the end.</figcaption>
+      </figure>
+      <p class="note tiny">Core simulation written in Rust, compiled to WebAssembly. No tracking, no accounts. <a href="https://github.com/timothyrmccaslin-sys/asura-idle" target="_blank" rel="noopener">Source</a></p>
+    </div>
+  </section>
+</main>
+
+<dialog id="modal">
+  <form method="dialog" class="modal-inner">
+    <div class="panel-label inline" id="modal-title">—</div>
+    <div id="modal-body"></div>
+    <div class="btn-row end" id="modal-actions"></div>
+  </form>
+</dialog>
+
+<div id="toast" class="toast" role="status" aria-live="polite"></div>
+
+<script type="module" src="main.js"></script>
+</body>
+</html>
