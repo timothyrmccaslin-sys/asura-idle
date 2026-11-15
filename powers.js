@@ -154,49 +154,182 @@ export function createPowers() {
   }
 
   // ------------------------------------------------------------ beads
-  function beadSprite(r) {
-    const key = Math.round(r * 2);
+  // Painted in the sumi-e manner: each bead is an uneven blot of red with a
+  // dry-brush ink rim and a broken glossy highlight (4 variants, cached per
+  // size); the cord is a wavering brush stroke; trails are smears that bleed
+  // and drip; droplets flick off and land as spatter; a red wash pools on the
+  // ground under the orbit.
+  const prng = (seed) => { let x = seed >>> 0 || 1; return () => ((x = (x * 1664525 + 1013904223) >>> 0) / 4294967296); };
+  function beadSprite(r, v) {
+    const key = Math.round(r * 2) * 8 + v;
     if (beadSpr.has(key)) return beadSpr.get(key);
-    const R = Math.max(3, key / 2), s = Math.ceil(R * 2 + 4), c = document.createElement('canvas'); c.width = c.height = s;
-    const g = c.getContext('2d'), m = s / 2;
-    const gr = g.createRadialGradient(m - R * 0.35, m - R * 0.4, R * 0.1, m, m, R);
-    gr.addColorStop(0, '#f06a5e'); gr.addColorStop(0.35, '#c62a32'); gr.addColorStop(0.85, '#7c121a'); gr.addColorStop(1, '#4a080d');
-    g.fillStyle = gr; g.beginPath(); g.arc(m, m, R, 0, TAU); g.fill();
-    g.strokeStyle = 'rgba(22,20,18,.75)'; g.lineWidth = Math.max(1, R * 0.16); g.beginPath(); g.arc(m, m, R * 0.95, 0.3, TAU - 0.6); g.stroke();
-    g.fillStyle = 'rgba(255,245,238,.9)'; g.beginPath(); g.ellipse(m - R * 0.38, m - R * 0.42, R * 0.32, R * 0.2, -0.6, 0, TAU); g.fill();
-    g.fillStyle = 'rgba(255,230,225,.35)'; g.beginPath(); g.arc(m + R * 0.35, m + R * 0.4, R * 0.16, 0, TAU); g.fill();
+    const R = Math.max(3, Math.round(r * 2) / 2), s = Math.ceil(R * 2.6 + 6), c = document.createElement('canvas'); c.width = c.height = s;
+    const g = c.getContext('2d'), m = s / 2, rr = prng(977 + v * 131 + Math.round(R) * 7);
+    // irregular blot outline
+    const pts = [], n = 22;
+    for (let i = 0; i < n; i++) { const a = (i / n) * TAU; pts.push([Math.cos(a), Math.sin(a), R * (0.9 + rr() * 0.16 + (i % 7 === 0 ? 0.08 : 0))]); }
+    const path = (k = 1, dx = 0, dy = 0) => { g.beginPath(); pts.forEach(([cx, cy, pr], i) => { const x = m + dx + cx * pr * k, y = m + dy + cy * pr * k; if (i) g.lineTo(x, y); else g.moveTo(x, y); }); g.closePath(); };
+    // bleed: a soft red halo soaking into the paper
+    g.fillStyle = 'rgba(150,22,30,.16)'; path(1.18, rr() - 0.5, rr() - 0.5); g.fill();
+    const gr = g.createRadialGradient(m - R * 0.35, m - R * 0.4, R * 0.08, m, m, R * 1.05);
+    gr.addColorStop(0, '#d24a40'); gr.addColorStop(0.3, '#a61d27'); gr.addColorStop(0.75, '#5c0c13'); gr.addColorStop(1, '#2a0508');
+    g.fillStyle = gr; path(); g.fill();
+    // pigment pooling: darker mottles inside
+    g.save(); path(); g.clip();
+    for (let i = 0; i < 10; i++) { g.fillStyle = `rgba(40,4,8,${0.16 + rr() * 0.24})`; g.beginPath(); g.ellipse(m + (rr() - 0.4) * R * 1.3, m + (rr() - 0.3) * R * 1.3, R * (0.15 + rr() * 0.3), R * (0.1 + rr() * 0.2), rr() * 3, 0, TAU); g.fill(); }
+    // dry-brush bristle streaks across the lower side
+    g.lineCap = 'round';
+    for (let i = 0; i < 9; i++) { g.strokeStyle = `rgba(22,12,12,${0.15 + rr() * 0.25})`; g.lineWidth = Math.max(0.6, R * (0.04 + rr() * 0.06)); const y = m + R * (0.1 + rr() * 0.8); g.beginPath(); g.moveTo(m - R, y); g.quadraticCurveTo(m, y + (rr() - 0.5) * R * 0.3, m + R, y - R * 0.2 * rr()); g.stroke(); }
+    g.restore();
+    // broken ink rim: dry-brush arcs with gaps, uneven weight
+    let a = rr() * TAU;
+    while (a < TAU * 1.9) {
+      const len = 0.5 + rr() * 1.3;
+      g.strokeStyle = `rgba(18,12,12,${0.7 + rr() * 0.3})`; g.lineWidth = Math.max(1, R * (0.12 + rr() * 0.16));
+      g.beginPath(); g.arc(m + (rr() - 0.5) * 0.8, m + (rr() - 0.5) * 0.8, R * (0.92 + rr() * 0.1), a, a + len); g.stroke();
+      a += len + 0.15 + rr() * 0.6;
+    }
+    // uneven gloss: a broken streak plus a speck or two
+    g.fillStyle = 'rgba(255,244,236,.85)';
+    g.beginPath(); g.ellipse(m - R * 0.36, m - R * 0.42, R * (0.2 + rr() * 0.14), R * (0.09 + rr() * 0.07), -0.6 - rr() * 0.4, 0, TAU); g.fill();
+    g.fillStyle = 'rgba(255,240,232,.6)';
+    for (let i = 0; i < 2; i++) { g.beginPath(); g.arc(m - R * (0.1 + rr() * 0.3), m - R * (0.55 + rr() * 0.2), R * (0.05 + rr() * 0.06), 0, TAU); g.fill(); }
+    g.fillStyle = 'rgba(255,225,220,.22)'; g.beginPath(); g.arc(m + R * 0.38, m + R * 0.42, R * 0.16, 0, TAU); g.fill();
+    // a fleck of ink spatter off the edge
+    if (v % 2 === 0) { g.fillStyle = 'rgba(120,16,22,.7)'; g.beginPath(); g.arc(m + R * (1.05 + rr() * 0.15), m + R * (0.2 + rr() * 0.4), Math.max(0.6, R * 0.09), 0, TAU); g.fill(); }
     beadSpr.set(key, c); return c;
   }
-  function drawBeads(ctx, front) {
-    if (beadAmt < 0.01) return;
-    const N = 14, H = S.H, bob = Math.sin(now * 1.8) * H * 0.025;
+  // soft red ink wash for the ground under the orbit (mottled, cached)
+  let washTex = null;
+  function wash() {
+    if (washTex) return washTex;
+    const s = 256, c = document.createElement('canvas'); c.width = c.height = s;
+    const g = c.getContext('2d'), rr = prng(4242);
+    for (let i = 0; i < 26; i++) {
+      const a = rr() * TAU, d = Math.sqrt(rr()) * s * 0.3, x = s / 2 + Math.cos(a) * d, y = s / 2 + Math.sin(a) * d, r = s * (0.08 + rr() * 0.16);
+      const gr = g.createRadialGradient(x, y, 0, x, y, r);
+      gr.addColorStop(0, `rgba(170,26,34,${0.12 + rr() * 0.12})`); gr.addColorStop(1, 'rgba(170,26,34,0)');
+      g.fillStyle = gr; g.fillRect(0, 0, s, s);
+    }
+    g.globalCompositeOperation = 'destination-in';
+    const mk = g.createRadialGradient(s / 2, s / 2, s * 0.1, s / 2, s / 2, s / 2);
+    mk.addColorStop(0, 'rgba(0,0,0,1)'); mk.addColorStop(0.7, 'rgba(0,0,0,.7)'); mk.addColorStop(1, 'rgba(0,0,0,0)');
+    g.fillStyle = mk; g.fillRect(0, 0, s, s);
+    return (washTex = c);
+  }
+  const BEADS = 14;
+  const beadVar = Array.from({ length: BEADS }, (_, i) => { const r = prng(31 + i * 17); return { k: 0.84 + r() * 0.32, sq: 0.9 + r() * 0.18, rot: r() * TAU, v: i % 4, ph: r() * TAU }; });
+  const drops = [];   // flicked droplets (screen space)
+  const splats = [];  // landed spatter and drips fading into the paper
+  let lastBeadT = 0, flickT = 0;
+  function orbit() {
+    const H = S.H, bob = Math.sin(now * 1.8) * H * 0.025;
     const cx = S.X + S.dx * 0.6, cy = S.Y - H * 0.42 + bob;
     const grow = 0.55 + 0.45 * beadAmt, rx = H * 0.7 * grow, ry = rx * 0.3, tilt = -0.17 + Math.sin(now * 0.7) * 0.04;
-    const ct = Math.cos(tilt), st = Math.sin(tilt);
-    // mala cord: back half behind him, front half in front
-    ctx.strokeStyle = `rgba(22,20,18,${0.35 * beadAmt})`; ctx.lineWidth = Math.max(1, H * 0.006);
-    ctx.beginPath(); ctx.ellipse(cx, cy, rx, ry, tilt, front ? 0 : Math.PI, front ? Math.PI : TAU); ctx.stroke();
-    for (let i = 0; i < N; i++) {
-      const a = beadAng + (i / N) * TAU, z = Math.sin(a);
-      if ((z >= 0) !== front) continue;
-      const lx = Math.cos(a) * rx, ly = Math.sin(a) * ry;
-      const x = cx + lx * ct - ly * st, y = cy + lx * st + ly * ct;
-      const depth = (z + 1) / 2, sc = 0.72 + 0.4 * depth;
-      const alpha = beadAmt * (0.55 + 0.45 * depth);
-      // faint red ink trail behind each bead along the orbit
-      if (!S.reduced && !S.lite) {
-        ctx.strokeStyle = `rgba(179,32,42,${0.16 * alpha * Math.min(1, beadSpin / 2)})`; ctx.lineWidth = H * 0.03 * sc;
-        ctx.lineCap = 'round';
-        ctx.beginPath(); ctx.ellipse(cx, cy, rx, ry, tilt, a - 0.55, a); ctx.stroke();
+    return { cx, cy, rx, ry, ct: Math.cos(tilt), st: Math.sin(tilt) };
+  }
+  const onOrbit = (o, a, k = 1) => { const lx = Math.cos(a) * o.rx * k, ly = Math.sin(a) * o.ry * k; return [o.cx + lx * o.ct - ly * o.st, o.cy + lx * o.st + ly * o.ct]; };
+  function stepBeadFx(o) {
+    const dt = Math.min(0.05, Math.max(0, now - lastBeadT)); lastBeadT = now;
+    if (S.reduced) { drops.length = 0; splats.length = 0; return; }
+    const H = S.H, fast = Math.min(1, beadSpin / 3);
+    // flick a droplet off a front bead now and then (more while spinning fast)
+    flickT -= dt * (0.6 + fast * 2.4) * beadAmt;
+    if (flickT <= 0 && beadAmt > 0.3 && drops.length < (S.lite ? 4 : 10)) {
+      flickT = 0.25 + Math.random() * 0.5;
+      const i = (Math.random() * BEADS) | 0, a = beadAng + (i / BEADS) * TAU;
+      const [x, y] = onOrbit(o, a);
+      const tx = -Math.sin(a) * o.rx * o.ct - Math.cos(a) * o.ry * o.st, ty = -Math.sin(a) * o.rx * o.st + Math.cos(a) * o.ry * o.ct;
+      const tl = Math.hypot(tx, ty) || 1, sp = H * (1.2 + Math.random() * 1.4) * (0.5 + fast);
+      drops.push({ x, y, px: x, py: y, vx: (tx / tl) * sp, vy: (ty / tl) * sp - H * 0.6, life: 0.5 + Math.random() * 0.3, r: H * (0.008 + Math.random() * 0.008), gy: S.Y + H * (0.02 + Math.random() * 0.1) });
+    }
+    for (let i = drops.length - 1; i >= 0; i--) {
+      const d = drops[i]; d.px = d.x; d.py = d.y;
+      d.vy += H * 6 * dt; d.x += d.vx * dt; d.y += d.vy * dt; d.life -= dt;
+      if (d.y >= d.gy || d.life <= 0) {
+        // lands: a little burst of spatter that bleeds and fades
+        const n = S.lite ? 2 : 4;
+        for (let k = 0; k < n; k++) splats.push({ x: d.x + (Math.random() - 0.5) * H * 0.05, y: Math.min(d.y, d.gy) + (Math.random() - 0.5) * H * 0.012, r: d.r * (0.4 + Math.random() * 0.9), life: 0.9, max: 0.9 });
+        drops.splice(i, 1);
       }
-      const spr = beadSprite(H * 0.04 * sc);
-      ctx.globalAlpha = alpha;
-      ctx.drawImage(spr, x - spr.width / 2, y - spr.height / 2);
+    }
+    for (let i = splats.length - 1; i >= 0; i--) { const p = splats[i]; p.life -= dt; if (p.vy) { p.y += p.vy * dt; p.vy *= 0.9; } if (p.life <= 0) splats.splice(i, 1); }
+    if (splats.length > 60) splats.splice(0, splats.length - 60);
+  }
+  function drawBeads(ctx, front) {
+    if (beadAmt < 0.01 && !drops.length && !splats.length) return;
+    const H = S.H, o = orbit(), red = S.reduced, lite = S.lite;
+    if (!front) {
+      stepBeadFx(o);
+      // red ink wash on the ground under the orbit
+      if (beadAmt > 0.01) {
+        const tex = wash(), wr = o.rx * 1.25;
+        ctx.save(); ctx.globalAlpha = (red ? 0.5 : 0.85) * beadAmt * (0.85 + 0.15 * Math.sin(now * 2.3));
+        ctx.translate(S.X, S.Y); ctx.scale(1, Math.min(0.6, S.SQ * 1.05)); ctx.rotate(now * 0.15);
+        ctx.drawImage(tex, -wr, -wr, wr * 2, wr * 2); ctx.restore();
+      }
+      // spatter and drips soak into the paper
+      for (const p of splats) { ctx.fillStyle = `rgba(150,20,28,${0.55 * (p.life / p.max)})`; ctx.beginPath(); ctx.ellipse(p.x, p.y, p.r * (1.6 - 0.4 * p.life / p.max), p.r * 0.7, 0, 0, TAU); ctx.fill(); }
+    }
+    if (beadAmt < 0.01) return;
+    // mala cord: a wavering brush stroke, thick and thin, broken in places
+    ctx.lineCap = 'round';
+    const seg = red ? 10 : 22, a0 = front ? 0 : Math.PI;
+    let prev = null;
+    for (let j = 0; j <= seg; j++) {
+      const a = a0 + (j / seg) * Math.PI, wob = 1 + Math.sin(a * 5 + now * 1.3) * 0.015;
+      const p = onOrbit(o, a, wob);
+      if (prev) {
+        const k = Math.sin(j * 1.7 + 0.5) * 0.5 + 0.5;
+        if (red || k > 0.12) {
+          ctx.strokeStyle = `rgba(22,16,14,${(0.4 + k * 0.4) * beadAmt})`;
+          ctx.lineWidth = Math.max(1, H * (0.004 + k * 0.01));
+          ctx.beginPath(); ctx.moveTo(prev[0], prev[1]); ctx.lineTo(p[0], p[1]); ctx.stroke();
+        }
+      }
+      prev = p;
+    }
+    for (let i = 0; i < BEADS; i++) {
+      const bv = beadVar[i];
+      const a = beadAng + (i / BEADS) * TAU, z = Math.sin(a);
+      if ((z >= 0) !== front) continue;
+      const [x, y] = onOrbit(o, a);
+      const depth = (z + 1) / 2, sc = (0.72 + 0.4 * depth) * bv.k;
+      const alpha = beadAmt * (0.55 + 0.45 * depth);
+      // ink smear behind each bead: overlapping blots that thin and bleed out
+      if (!red && beadSpin > 0.8) {
+        const n = lite ? 3 : 6, sp = Math.min(0.75, 0.16 * beadSpin);
+        for (let k = n; k >= 1; k--) {
+          const f = k / n, [tx, ty] = onOrbit(o, a - sp * f, 1 + Math.sin(k * 2.1 + bv.ph) * 0.02);
+          ctx.fillStyle = `rgba(${150 - k * 10},20,28,${0.4 * alpha * (1 - f) + 0.05})`;
+          ctx.beginPath(); ctx.ellipse(tx, ty + f * H * 0.012, H * 0.03 * sc * (1 - f * 0.5), H * 0.017 * sc * (1 - f * 0.3), Math.atan2(o.st, o.ct), 0, TAU); ctx.fill();
+        }
+        // a tapering dark brush tail through the smear
+        { const m = lite ? 4 : 7; let pp = null;
+          for (let k = 0; k <= m; k++) {
+            const f = k / m, p = onOrbit(o, a - sp * 1.1 * f, 1 + Math.sin(k * 1.9 + bv.ph + now) * 0.012);
+            if (pp) { ctx.strokeStyle = `rgba(70,8,14,${0.5 * alpha * (1 - f)})`; ctx.lineWidth = Math.max(0.6, H * 0.016 * sc * (1 - f)); ctx.beginPath(); ctx.moveTo(pp[0], pp[1]); ctx.lineTo(p[0], p[1]); ctx.stroke(); }
+            pp = p;
+          } }
+        // a drip now and then hangs off the smear and runs down
+        if (!lite && Math.random() < 0.012 * beadSpin && splats.length < 60) splats.push({ x: x + (Math.random() - 0.5) * H * 0.02, y: y + H * 0.02, r: H * 0.006, life: 0.7, max: 0.7, vy: H * 0.5 });
+      }
+      const spr = beadSprite(H * 0.042 * sc, bv.v);
+      ctx.save(); ctx.globalAlpha = alpha; ctx.translate(x, y); ctx.rotate(bv.rot + a * 0.3); ctx.scale(1, bv.sq);
+      ctx.drawImage(spr, -spr.width / 2, -spr.height / 2);
       if (depth < 0.5) { // shade beads passing behind him
         ctx.globalAlpha = (0.5 - depth) * 0.7 * beadAmt; ctx.fillStyle = '#161412';
-        ctx.beginPath(); ctx.arc(x, y, spr.width / 2 - 2, 0, TAU); ctx.fill();
+        ctx.beginPath(); ctx.arc(0, 0, spr.width * 0.36, 0, TAU); ctx.fill();
       }
-      ctx.globalAlpha = 1;
+      ctx.restore();
+    }
+    if (front && !red) {
+      // flicked droplets with a short tapering ink streak
+      for (const d of drops) {
+        ctx.strokeStyle = `rgba(170,24,32,${Math.min(1, d.life * 2) * 0.8})`; ctx.lineWidth = d.r * 1.4;
+        ctx.beginPath(); ctx.moveTo(d.px - (d.x - d.px) * 1.5, d.py - (d.y - d.py) * 1.5); ctx.lineTo(d.x, d.y); ctx.stroke();
+        ctx.fillStyle = 'rgba(150,18,26,.9)'; ctx.beginPath(); ctx.arc(d.x, d.y, d.r, 0, TAU); ctx.fill();
+      }
     }
   }
 

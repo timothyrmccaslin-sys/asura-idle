@@ -53,12 +53,10 @@ export function unproject(c, X, Y) {
   if (s <= 0.05) return null;
   return { x: (X - c.cx) / (c.gs * s), y: c.D0 * (1 - 1 / s), s };
 }
-// projected circle of radius r around the Asura: centre, radii (for stamps)
-export function circleBox(c, r) {
-  const top = py(c, -r), bot = py(c, r);
+// projected circle of radius r around the ground point (0, y0): centre, radii
+export function circleBox(c, r, y0 = 0) {
+  const top = py(c, y0 - r), bot = py(c, y0 + r);
   let w = 0;
-  for (let i = 0; i <= 12; i++) { const a = (i / 12) * Math.PI; w = Math.max(w, Math.abs(px(c, Math.cos(a) * r, Math.sin(a) * r * 0) - c.cx)); }
-  // widest point: scan y across the circle
-  for (let i = 1; i < 12; i++) { const yy = -r + (2 * r * i) / 12; w = Math.max(w, Math.sqrt(Math.max(0, r * r - yy * yy)) * c.gs * depth(c, yy)); }
+  for (let i = 0; i <= 12; i++) { const yy = -r + (2 * r * i) / 12; w = Math.max(w, Math.sqrt(Math.max(0, r * r - yy * yy)) * c.gs * depth(c, y0 + yy)); }
   return { cy: (top + bot) / 2, rx: w, ry: (bot - top) / 2 };
 }

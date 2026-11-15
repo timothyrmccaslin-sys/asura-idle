@@ -82,6 +82,11 @@ export function createRenderer(canvas) {
   const toX = (x, y) => camX(cam, x, y);
   const toY = (y) => camY(cam, y);
   const dsz = (y) => camSize(cam, y);
+  // The Asura is drawn a little toward the camera from the ring's centre (the
+  // core still has him at 0,0): standing exactly at the centre reads as too far
+  // back, since the near half of a foreshortened ring is larger on screen.
+  const AY = 0.2;
+  let aY = 0; // his feet on screen, refreshed per frame from the scene camera
   const proj = (x, y) => [camX(cam, x, y), camY(cam, y), camSize(cam, y)];
 
   function resize() {
@@ -330,7 +335,7 @@ export function createRenderer(canvas) {
   const FOE_H = [0.33, 0.31, 0.27, 0.34, 0.35, 0.36, 0.35, 0.42, 0.74, 0.74, 0.74, 0.7, 0.72];
   const HIP = [0.6, 0.6, 0.62, 0.6, 0.6, 0, 0, 0.62, 0.64, 0, 0.64, 0, 0];
   const FLY = new Set([5, 6, 9, 12]);
-  const asuraH = () => 0.45 * scale;
+  const asuraH = () => 0.45 * scale * 1.07; // a touch larger, per his nearer depth
   function cached(key, make) {
     let v = artCache.get(key);
     if (v === undefined) { v = make(); artCache.set(key, v); }
@@ -463,7 +468,7 @@ export function createRenderer(canvas) {
     const li = lunge > 0.85 ? 3 : lunge > 0.55 ? 2 : lunge > 0.2 ? 1 : 0;
     const fr = Math.floor((((t * 2.2) / TAU) % 1) * FRAMES) % FRAMES;
     const s = asuraSprite(reduced ? 0 : fr, li, f[9] > 0, asuraPx());
-    ctx.save(); ctx.translate(cx, cy - 2 * dpr); ctx.scale(face, 1);
+    ctx.save(); ctx.translate(cx, aY - 2 * dpr); ctx.scale(face, 1);
     ctx.drawImage(s.c, -s.ox, -s.oy);
     ctx.restore();
     powers.drawFront(ctx);
@@ -577,7 +582,8 @@ export function createRenderer(canvas) {
     let dt = dtReal;
     govern(dtReal);
     cam = stage.cam || camDefault;
-    if (art) dt = dtReal * anim.update(dtReal, f, en, f[1], { reduced, lite, H: asuraH(), X: cx, Y: cy, dpr, SQ: cam.q, scale, proj });
+    aY = toY(AY);
+    if (art) dt = dtReal * anim.update(dtReal, f, en, f[1], { reduced, lite, H: asuraH(), X: cx, Y: aY, dpr, SQ: cam.q, scale, proj });
     lastDt = dt;
     time += dt;
     for (let i = delayed.length - 1; i >= 0; i--) {
@@ -596,7 +602,7 @@ export function createRenderer(canvas) {
       if (boss) { stamp(x * 0.45, y * 0.45, 0.2, true, 0.3); stamp(x * 0.5, y * 0.5, 0.16, false, 4, true); if (!reduced) shake = Math.max(shake, 6); }
       else if (!reduced && !lite) stamp(x * 0.55, y * 0.55, 0.07, R() < 0.3, 0.2);
     });
-    { const p = anim.pose; powers.update(dt, f, en, { X: cx, Y: cy, H: asuraH(), scale, SQ: cam.q, proj, dpr, reduced, lite, dx: art && p ? p.dx || 0 : 0 }); }
+    { const p = anim.pose; powers.update(dt, f, en, { X: cx, Y: aY, H: asuraH(), scale, SQ: cam.q, proj, dpr, reduced, lite, dx: art && p ? p.dx || 0 : 0 }); }
     const t = time;
     ctx.setTransform(1, 0, 0, 1, 0, 0);
     let sx = 0, sy = 0;
@@ -659,14 +665,14 @@ export function createRenderer(canvas) {
       if (r.life <= 0) { rings.splice(i, 1); continue; }
       r.r += (r.max - r.r) * Math.min(1, dt * 9);
       if (art) {
-        const tex = arcTex(r.red), cb = circleBox(cam, r.r), k = cb.rx / tex.r;
+        const tex = arcTex(r.red), cb = circleBox(cam, r.r, AY), k = cb.rx / tex.r;
         ctx.save(); ctx.translate(cx, cb.cy); ctx.scale(k, cb.ry / tex.r); ctx.rotate(r.rot + (1 - r.life) * (r.red ? 2.2 : -1.6));
         ctx.globalAlpha = Math.min(1, r.life * (r.red ? 1.6 : 1.2));
         ctx.drawImage(tex.c, -tex.cx, -tex.cy);
         ctx.restore(); ctx.globalAlpha = 1;
         continue;
       }
-      const cb = circleBox(cam, r.r);
+      const cb = circleBox(cam, r.r, AY);
       ctx.save(); ctx.translate(cx, cb.cy);
       ctx.strokeStyle = r.red ? `rgba(179,32,42,${r.life})` : `rgba(22,20,18,${r.life * 0.8})`;
       ctx.lineWidth = (r.red ? 7 : 3) * dpr * (0.4 + r.life);
@@ -722,7 +728,7 @@ export function createRenderer(canvas) {
       }
     };
     for (const i of order) {
-      if (!asuraDrawn && en[i * 11 + 3] > 0) { drawAsura(f, t); asuraDrawn = true; }
+      if (!asuraDrawn && en[i * 11 + 3] > AY) { drawAsura(f, t); asuraDrawn = true; }
       drawEnemy(i);
     }
     if (!asuraDrawn) drawAsura(f, t);
@@ -748,7 +754,7 @@ export function createRenderer(canvas) {
     for (let i = swipes.length - 1; i >= 0; i--) {
       const sw = swipes[i]; sw.life -= dt;
       if (sw.life <= 0) { swipes.splice(i, 1); continue; }
-      const ox = cx, oy = cy - 0.17 * scale;
+      const ox = cx, oy = aY - 0.17 * scale;
       const a = Math.atan2(toY(sw.y) - 0.07 * scale * dsz(sw.y) - oy, toX(sw.x, sw.y) - ox);
       const p = 1 - sw.life / 0.17, rr = 0.15 * scale * (1 + p * 0.5);
       const span = 1.1, a0 = a - span * (sw.flip ? -1 : 1), a1 = a + span * (sw.flip ? -1 : 1);
