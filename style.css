@@ -293,3 +293,9 @@ body.daeva .btn.danger.primary { background: #b3202a; color: var(--paper); }
 body.daeva .bead-dot { background: radial-gradient(circle at 35% 35%, #e46a6a, #b3202a 55%, #5a0c10); }
 body.daeva #hp-fill { background: linear-gradient(90deg, #1b3f9e, #3f7bff); }
 body.daeva .coin.bead .val, body.daeva #reb-gain { color: #b3202a; }
+/* hand-painted macron over a plain letter (the brush/hand fonts lack ō, ū…) */
+.mac { position: relative; display: inline-block; }
+.mac::after {
+  content: ''; position: absolute; left: 12%; right: 8%; top: 0.1em; height: 0.1em;
+  background: currentColor; border-radius: 60% 40% 55% 45% / 70% 50% 60% 40%; transform: rotate(-5deg); pointer-events: none;
+}

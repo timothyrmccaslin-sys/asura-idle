@@ -1,3 +1,4 @@
+import { fillTextMacron, stripMacrons } from './macron.js';
 // Themed stages. Every 10-wave block is themed after the boss waiting at its end
 // (Oni Warlord, Tengu King, Shogun, Orochi, Onryo Queen). The painted backdrop is
 // cover-fitted, then a seeded RNG keyed to the block scatters painted props around
@@ -346,14 +347,14 @@ export function createStage() {
     const y = H * 0.2, fs = Math.round(Math.max(22 * dpr, m * 0.07));
     ctx.save(); ctx.globalAlpha = a; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
     ctx.font = `${fs}px Brush, sans-serif`;
-    const tw = ctx.measureText(banner.title).width;
+    const tw = ctx.measureText(stripMacrons(banner.title)).width;
     // ink wash band behind the title
     const g = ctx.createLinearGradient(W / 2 - tw * 0.9, 0, W / 2 + tw * 0.9, 0);
     g.addColorStop(0, 'rgba(236,230,216,0)'); g.addColorStop(0.2, 'rgba(236,230,216,.82)'); g.addColorStop(0.8, 'rgba(236,230,216,.82)'); g.addColorStop(1, 'rgba(236,230,216,0)');
     ctx.fillStyle = g; ctx.fillRect(W / 2 - tw * 0.9, y - fs * 0.85, tw * 1.8, fs * 2.1);
     const reveal = Math.min(1, t / 0.6);
     ctx.save(); ctx.beginPath(); ctx.rect(W / 2 - tw / 2 - fs, 0, (tw + fs * 2) * reveal, H); ctx.clip();
-    ctx.fillStyle = '#161412'; ctx.fillText(banner.title, W / 2, y);
+    ctx.fillStyle = '#161412'; fillTextMacron(ctx, banner.title, W / 2, y);
     // brush underline with a red seal
     ctx.fillStyle = 'rgba(22,20,18,.85)';
     ctx.beginPath(); ctx.moveTo(W / 2 - tw * 0.55, y + fs * 0.6); ctx.quadraticCurveTo(W / 2, y + fs * 0.48, W / 2 + tw * 0.55, y + fs * 0.62);
@@ -363,7 +364,7 @@ export function createStage() {
     ctx.fillRect(W / 2 + tw / 2 + fs * 0.25, y - ss / 2, ss, ss);
     ctx.fillStyle = PAPER; ctx.font = `${Math.round(ss * 0.7)}px Kanji, serif`; ctx.fillText('修', W / 2 + tw / 2 + fs * 0.25 + ss / 2, y + ss * 0.04);
     ctx.font = `${Math.round(fs * 0.38)}px Hand, sans-serif`; ctx.fillStyle = '#4d4842';
-    ctx.fillText(banner.sub, W / 2, y + fs * 1.0);
+    fillTextMacron(ctx, banner.sub, W / 2, y + fs * 1.0);
     ctx.restore();
   }
 

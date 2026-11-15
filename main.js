@@ -2,11 +2,12 @@
 // and persists saves to localStorage. All game rules live in Rust.
 import init, { Game } from './pkg/asura_core.js';
 import { createRenderer, fmt } from './render.js';
+import { macronHTML } from './macron.js';
 
 const SAVE_KEY = 'asura-idle-save-v1';
 const PREFS_KEY = 'asura-idle-prefs-v1';
 const AUTOSAVE_MS = 5000;
-const APP_VERSION = '3.3.1'; // keep in step with VERSION in sw.js
+const APP_VERSION = '3.3.2'; // keep in step with VERSION in sw.js
 
 const UPS = {
   damage:   { name: 'Wrath',        desc: 'Raw striking power. Doubles every 25 levels.', f: (v) => fmt(v) },
@@ -100,7 +101,7 @@ let bannerT = 0;
 function banner(text, sub, red) {
   const b = $('banner');
   b.hidden = false; b.className = 'banner' + (red ? ' red' : '');
-  b.innerHTML = text + (sub ? `<small>${sub}</small>` : '');
+  b.innerHTML = macronHTML(text) + (sub ? `<small>${macronHTML(sub)}</small>` : '');
   b.style.animation = 'none'; void b.offsetWidth; b.style.animation = '';
   clearTimeout(bannerT); bannerT = setTimeout(() => (b.hidden = true), 2100);
 }
