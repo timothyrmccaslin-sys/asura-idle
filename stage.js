@@ -5,6 +5,7 @@
 // particles. So each block is unique but identical after a reload. The static
 // scene is baked once per block into an offscreen canvas; block changes bleed in
 // with an ink-wash transition and a brush-lettered banner.
+import { PERSP, fitImage, makeCam, lerpCam, px as camX, py as camY, size as camSize, unproject, circleBox, aspect } from './cam.js';
 const BASE = new URL('./assets/themes/', import.meta.url).href;
 const PAPER = '#ece6d8';
 const SQ = 0.8;
@@ -38,6 +39,7 @@ export function createStage() {
   const loaded = new Map(); // theme index -> {bg, props, frames} | Promise
   let V = null;             // view: {W, H, cx, cy, scale, dpr}
   let block = -1, theme = 0, scene = null, sceneBlock = -1, wantBlock = -1;
+  let sceneCam = null, prevCam = null, bakeCam = null;
   let prev = null, transT = 0, transDur = 1.9, banner = null, splat = null;
   let mask = null, maskBig = null, tmp = null;
   const parts = [];
@@ -69,30 +71,33 @@ export function createStage() {
     g.fillStyle = PAPER; g.fillRect(0, 0, W, H);
     // cover-fit the painting so its ground centre (0.5, 0.6) sits under the Asura
     const iw = art.bg.width, ih = art.bg.height;
-    const s = Math.max(W / iw, H / ih) * (1.04 + r() * 0.06);
+    r(); // (was a random zoom; the zoom is fixed now so the horizon is known)
+    const fit = fitImage(V, iw, ih), s = fit.s;
     const flip = r() < 0.5;
-    let ox = cx - iw * s * 0.5 + (r() - 0.5) * W * 0.04, oy = cy - ih * s * 0.6;
-    ox = Math.min(0, Math.max(W - iw * s, ox)); oy = Math.min(0, Math.max(H - ih * s, oy));
+    let ox = cx - iw * s * 0.5 + (r() - 0.5) * W * 0.04, oy = fit.oy;
+    ox = Math.min(0, Math.max(W - iw * s, ox));
+    const P = PERSP[T.key] || PERSP.none;
+    const cam = makeCam(V, oy + P.hz * ih * s, P.q);
+    bakeCam = cam;
     g.save();
     if (flip) { g.translate(W, 0); g.scale(-1, 1); }
     g.imageSmoothingQuality = 'high';
     g.drawImage(art.bg, flip ? W - ox - iw * s : ox, oy, iw * s, ih * s);
     g.restore();
     if (T.tint) { g.fillStyle = T.tint; g.fillRect(0, 0, W, H); }
-    const toX = (x) => cx + x * scale, toY = (y) => cy + y * scale * SQ;
     // varied ground: a few soft ink pools and dry grass flicks near the edges
     for (let i = 0; i < 9; i++) {
       const a = r() * Math.PI * 2, d = 0.95 + r() * 0.6;
-      const x = toX(Math.cos(a) * d), y = toY(Math.sin(a) * d), rr = (0.1 + r() * 0.22) * scale;
+      const wx = Math.cos(a) * d, wy = Math.sin(a) * d, x = camX(cam, wx, wy), y = camY(cam, wy), rr = (0.1 + r() * 0.22) * scale * camSize(cam, wy);
       const gr = g.createRadialGradient(x, y, 0, x, y, rr);
       gr.addColorStop(0, 'rgba(30,27,24,.10)'); gr.addColorStop(1, 'rgba(30,27,24,0)');
-      g.fillStyle = gr; g.beginPath(); g.ellipse(x, y, rr * 1.5, rr * SQ, 0, 0, Math.PI * 2); g.fill();
+      g.fillStyle = gr; g.beginPath(); g.ellipse(x, y, rr * 1.5, rr * 1.5 * aspect(cam, wy), 0, 0, Math.PI * 2); g.fill();
     }
     g.lineCap = 'round';
     for (let i = 0; i < 26; i++) {
       const a = r() * Math.PI * 2, d = 0.55 + r() * 0.9;
-      const x = toX(Math.cos(a) * d), y = toY(Math.sin(a) * d);
-      if (y < H * 0.3) continue;
+      const gy = Math.sin(a) * d, x = camX(cam, Math.cos(a) * d, gy), y = camY(cam, gy);
+      if (y < H * 0.3 || y > H) continue;
       const n = 3 + ((r() * 4) | 0), hgt = (4 + r() * 8) * dpr;
       g.strokeStyle = `rgba(22,20,18,${0.08 + r() * 0.14})`;
       for (let k = 0; k < n; k++) {
@@ -107,25 +112,36 @@ export function createStage() {
     const order = fr.map((_, i) => i).sort(() => r() - 0.5);
     for (let tries = 0; placed.length < n && tries < 260; tries++) {
       const X = W * (0.02 + r() * 0.96), Y = H * (0.3 + r() * 0.74);
-      const wx = (X - cx) / scale, wy = (Y - cy) / (scale * SQ);
-      if (Math.hypot(wx, wy) < 1.0) continue;
+      const k = order[placed.length % order.length], flip = r() < 0.5, sz = 0.85 + r() * 0.35;
+      const w = unproject(cam, X, Y);
+      if (!w || Math.hypot(w.x, w.y) < 1.0) continue;
+      // near props are scaled by depth but capped, and no part of one may
+      // reach into the combat circle (checked at its top and base corners)
+      const dep = Math.min(1.2, camSize(cam, w.y)), f = fr[k];
+      const ph = 0.3 * scale * dep * sz, pw = f.w * (ph / f.h);
+      const clear = [[X, Y - ph * 0.85], [X - pw * 0.4, Y], [X + pw * 0.4, Y], [X, Y - ph * 0.45]].every(([qx, qy]) => {
+        const u = unproject(cam, qx, qy); return !u || Math.hypot(u.x, u.y) >= 0.92;
+      });
+      if (!clear) continue;
       if (placed.some((p) => Math.hypot(p.X - X, (p.Y - Y) * 1.6) < W * 0.13)) continue;
-      placed.push({ X, Y, k: order[placed.length % order.length], flip: r() < 0.5, sz: 0.85 + r() * 0.35 });
+      placed.push({ X, Y, dep, k, flip, sz });
     }
     placed.sort((a, b) => a.Y - b.Y);
     for (const p of placed) {
-      const f = fr[p.k], depth = 0.55 + 0.6 * Math.min(1, p.Y / H);
+      const f = fr[p.k], depth = p.dep;
       const h = 0.3 * scale * depth * p.sz, k = h / f.h, w = f.w * k;
       g.fillStyle = 'rgba(22,20,18,.16)';
-      g.beginPath(); g.ellipse(p.X, p.Y, w * 0.38, w * 0.07, 0, 0, Math.PI * 2); g.fill();
+      { const u = unproject(cam, p.X, p.Y); g.beginPath(); g.ellipse(p.X, p.Y, w * 0.38, w * 0.38 * Math.min(0.6, u ? aspect(cam, u.y) * 0.55 : 0.2), 0, 0, Math.PI * 2); g.fill(); }
       g.save(); g.translate(p.X, p.Y); if (p.flip) g.scale(-1, 1);
       g.drawImage(art.props, f.x, f.y, f.w, f.h, -w / 2, -f.ay * k, w, f.h * k);
       g.restore();
     }
     // keep the combat circle calm and readable
-    const cg = g.createRadialGradient(cx, cy, 0, cx, cy, scale * 0.95);
+    const cb = circleBox(cam, 1.05);
+    g.save(); g.translate(cx, cb.cy); g.scale(1, cb.ry / cb.rx);
+    const cg = g.createRadialGradient(0, 0, 0, 0, 0, cb.rx);
     cg.addColorStop(0, 'rgba(236,230,216,.32)'); cg.addColorStop(0.7, 'rgba(236,230,216,.12)'); cg.addColorStop(1, 'rgba(236,230,216,0)');
-    g.fillStyle = cg; g.beginPath(); g.ellipse(cx, cy, scale * 0.95 * 1.25, scale * 0.95 * SQ * 1.25, 0, 0, Math.PI * 2); g.fill();
+    g.fillStyle = cg; g.beginPath(); g.arc(0, 0, cb.rx, 0, Math.PI * 2); g.fill(); g.restore();
     g.save(); g.globalAlpha = 0.035; g.fillStyle = '#161412';
     g.font = `${Math.round(Math.min(W, H) * 0.42)}px Kanji, serif`; g.textAlign = 'center'; g.textBaseline = 'middle';
     g.fillText('修羅', cx, cy + H * 0.02); g.restore();
@@ -326,7 +342,7 @@ export function createStage() {
   }
 
   return {
-    setView(v) { V = v; scene = null; sceneBlock = -1; prev = null; for (const k in sprites) delete sprites[k]; },
+    setView(v) { V = v; scene = null; sceneCam = null; prevCam = null; sceneBlock = -1; prev = null; for (const k in sprites) delete sprites[k]; },
     setSplat(fr) { splat = fr; },
     // returns true when the baked scene changed (renderer re-bakes its ground layer)
     update(wave, dt, quality) {
@@ -338,9 +354,9 @@ export function createStage() {
         const old = scene;
         const s = bake(b);
         if (s) {
-          if (!first && old && quality !== 'reduced') { prev = old; transT = 0; if (banner) banner.t = -0.95; } // let the wave cry clear first
+          if (!first && old && quality !== 'reduced') { prev = old; prevCam = sceneCam; transT = 0; if (banner) banner.t = -0.95; } // let the wave cry clear first
           else if (!first) prev = null;
-          scene = s; sceneBlock = b; block = b; theme = t; changed = true;
+          scene = s; sceneCam = bakeCam; sceneBlock = b; block = b; theme = t; changed = true;
           if (!first && quality === 'reduced' && banner) banner.t = -0.95;
         }
       }
@@ -349,6 +365,14 @@ export function createStage() {
       return changed;
     },
     get scene() { return scene; },
+    // camera for the current scene, eased from the previous one while it bleeds in
+    get cam() {
+      if (!sceneCam) return null;
+      if (!prev || !prevCam) return sceneCam;
+      const p = Math.min(1, transT / transDur), e = p * p * (3 - 2 * p);
+      return lerpCam(prevCam, sceneCam, e);
+    },
+    get _lastCam() { return bakeCam; },
     get theme() { return theme; },
     get block() { return block; },
     get transitioning() { return !!prev; },

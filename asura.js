@@ -86,7 +86,7 @@ export function createAsura() {
   let lastImpact = -9, lastN = 1, combo = 0, comboIdx = 0, recent = [];
   const trails = [], hist = [], beadHist = [], waves = [];
   let ribbons = null, lastSt = null, lastDist = new Map();
-  const S = { reduced: false, lite: false, H: 100, X: 0, Y: 0, dpr: 1, SQ: 0.8, scale: 1 };
+  const S = { reduced: false, lite: false, H: 100, X: 0, Y: 0, dpr: 1, SQ: 0.8, scale: 1, proj: null };
 
   function dur(M, aps, storm, arms) {
     const minD = storm ? 0.22 : arms ? 0.26 : 0.3;
@@ -259,7 +259,8 @@ export function createAsura() {
   }
   // a painted crescent of ki that flies from the strike to a foe at range
   function kiWave(x, y, red) {
-    const tx = S.X + x * S.scale, ty = S.Y + y * S.scale * S.SQ - 0.07 * S.scale;
+    const P = S.proj ? S.proj(x, y) : [S.X + x * S.scale, S.Y + y * S.scale * S.SQ, 1];
+    const tx = P[0], ty = P[1] - 0.07 * S.scale * P[2];
     const ox = S.X + (x < 0 ? -1 : 1) * S.H * 0.18, oy = S.Y - S.H * 0.6;
     const dist = Math.hypot(tx - ox, ty - oy);
     if (dist < S.H * 0.45) return; // in reach of the limb itself

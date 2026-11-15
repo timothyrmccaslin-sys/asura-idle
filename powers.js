@@ -40,7 +40,7 @@ function bolt(ctx, pts, w, a, core = true) {
 }
 
 export function createPowers() {
-  const S = { X: 0, Y: 0, H: 100, scale: 100, SQ: 0.8, dpr: 1, reduced: false, lite: false, dx: 0 };
+  const S = { X: 0, Y: 0, H: 100, scale: 100, SQ: 0.8, dpr: 1, reduced: false, lite: false, dx: 0, proj: null };
   let now = 0, stormOn = false, stormT = 9, burstDone = true, crackSeed = 1, crackT = 0;
   const lashes = [];  // live bolts: {pts..., life, max, w, seed, x0,y0,x1,y1, forks}
   let beadAmt = 0, beadAng = 0, beadSpin = 0, beadsOn = false;
@@ -50,7 +50,8 @@ export function createPowers() {
 
   const C = () => [S.X + S.dx, S.Y - S.H * 0.45]; // cage centre (chest)
   const cagePt = (a) => { const [cx, cy] = C(); return [cx + Math.cos(a) * S.H * 0.48, cy + Math.sin(a) * S.H * 0.6]; };
-  const toS = (x, y) => [S.X + x * S.scale, S.Y + y * S.scale * S.SQ - 0.07 * S.scale];
+  // world ground point -> screen (through the scene's perspective camera), at hit height
+  const toS = (x, y) => { if (S.proj) { const p = S.proj(x, y); return [p[0], p[1] - 0.07 * S.scale * p[2]]; } return [S.X + x * S.scale, S.Y + y * S.scale * S.SQ - 0.07 * S.scale]; };
 
   function lash(tx, ty, w, life) {
     const [cx, cy] = C();
@@ -109,7 +110,7 @@ export function createPowers() {
       // red ground glow under him
       const gr = ctx.createRadialGradient(S.X, S.Y, 0, S.X, S.Y, S.H * 0.7);
       gr.addColorStop(0, `rgba(179,32,42,${0.22 * q})`); gr.addColorStop(1, 'rgba(179,32,42,0)');
-      ctx.fillStyle = gr; ctx.beginPath(); ctx.ellipse(S.X, S.Y, S.H * 0.7, S.H * 0.7 * S.SQ * 0.5, 0, 0, TAU); ctx.fill();
+      ctx.fillStyle = gr; ctx.beginPath(); ctx.ellipse(S.X, S.Y, S.H * 0.7, S.H * 0.7 * S.SQ * 0.9, 0, 0, TAU); ctx.fill();
       // the cage: arcs between points on an ellipse around him, crackling
       const r = rng(crackSeed);
       const N = building ? Math.max(2, Math.ceil(q * 9)) : S.lite || S.reduced ? 3 : 5;

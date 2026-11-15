@@ -3,6 +3,8 @@ import { loadArt, makeFrame, flashOf as paintedFlash, tinted, unwrapRing } from 
 import { createAsura } from './asura.js';
 import { createStage } from './stage.js';
 import { createPowers } from './powers.js';
+import { createFoeRig } from './foes.js';
+import { PERSP, horizonFor, makeCam, px as camX, py as camY, size as camSize, aspect as camAspect, circleBox } from './cam.js';
 // Ink renderer — draws the state exported by the Rust/wasm core onto a canvas
 // in a sumi-e style. Pure presentation: no game rules live here.
 
@@ -64,6 +66,7 @@ export function createRenderer(canvas) {
   const anim = createAsura();
   const stage = createStage();
   const powers = createPowers();
+  const rig = createFoeRig({ frame: (k) => (art ? foeFrame(k) : null), flashOf: paintedFlash });
   powers.setHooks({
     impact: (x, y) => { stamp(x, y, 0.2, true, 0.3); stamp(x, y, 0.12, true, 5, true); },
     shake: (v) => { if (!reduced) shake = Math.max(shake, v); },
@@ -74,8 +77,12 @@ export function createRenderer(canvas) {
   loadArt().then((a) => { art = a; artCache = new Map(); }).catch((e) => console.warn(e));
   const R = rng(1234);
 
-  const toX = (x) => cx + x * scale;
-  const toY = (y) => cy + y * scale * SQ;
+  // ground-plane perspective (cam.js): the stage supplies each scene's camera
+  let cam = null, camDefault = null;
+  const toX = (x, y) => camX(cam, x, y);
+  const toY = (y) => camY(cam, y);
+  const dsz = (y) => camSize(cam, y);
+  const proj = (x, y) => [camX(cam, x, y), camY(cam, y), camSize(cam, y)];
 
   function resize() {
     const r = canvas.getBoundingClientRect();
@@ -85,12 +92,16 @@ export function createRenderer(canvas) {
     canvas.width = W; canvas.height = H;
     scale = Math.min(W, H / SQ * 0.96) / 2 * 0.98;
     cx = W / 2; cy = H / 2 + H * 0.02;
+    camDefault = makeCam({ W, H, cx, cy, scale }, horizonFor({ W, H, cx, cy }, PERSP.none.hz), PERSP.none.q);
+    cam = camDefault;
     buildBackground();
     sprites = new Map();
     artCache = new Map();
     bgLive = null;
     splatSet = false;
     stage.setView({ W, H, cx, cy, scale, dpr });
+    camDefault = makeCam({ W, H, cx, cy, scale }, horizonFor({ W, H, cx, cy }, PERSP.none.hz), PERSP.none.q);
+    cam = camDefault;
     prewarm();
   }
 
@@ -150,17 +161,17 @@ export function createRenderer(canvas) {
     // ink-wash ground pools
     for (let i = 0; i < 14; i++) {
       const a = r() * Math.PI * 2, d = 0.3 + r() * 0.9;
-      const x = toX(Math.cos(a) * d), y = toY(Math.sin(a) * d);
-      const rr = (0.12 + r() * 0.25) * scale;
+      const gy = Math.sin(a) * d, x = toX(Math.cos(a) * d, gy), y = toY(gy);
+      const rr = (0.12 + r() * 0.25) * scale * dsz(gy);
       const gr = g.createRadialGradient(x, y, 0, x, y, rr);
       gr.addColorStop(0, 'rgba(40,36,30,.07)'); gr.addColorStop(1, 'rgba(40,36,30,0)');
-      g.fillStyle = gr; g.beginPath(); g.ellipse(x, y, rr * 1.4, rr * SQ, 0, 0, Math.PI * 2); g.fill();
+      g.fillStyle = gr; g.beginPath(); g.ellipse(x, y, rr * 1.4, rr * 1.4 * camAspect(cam, gy), 0, 0, Math.PI * 2); g.fill();
     }
     // grass tufts — dry brush flicks
     g.lineCap = 'round';
     for (let i = 0; i < 34; i++) {
       const a = r() * Math.PI * 2, d = 0.25 + r() * 1.25;
-      const x = toX(Math.cos(a) * d), y = toY(Math.sin(a) * d);
+      const gy = Math.sin(a) * d, x = toX(Math.cos(a) * d, gy), y = toY(gy);
       const n = 3 + (r() * 4 | 0), hgt = (5 + r() * 9) * dpr;
       g.strokeStyle = `rgba(22,20,18,${0.12 + r() * 0.18})`;
       for (let k = 0; k < n; k++) {
@@ -221,19 +232,25 @@ export function createRenderer(canvas) {
   function circ(g, x, y, r, color) { g.fillStyle = color; g.beginPath(); g.arc(x, y, r, 0, Math.PI * 2); g.fill(); }
 
   // brush ring (range indicator)
+  // range ring: a brush circle lying on the ground, projected through the scene
+  // camera, so it foreshortens toward the horizon and the strokes thin with depth
   function brushRing(radius, t) {
-    const n = 64;
-    ctx.save(); ctx.translate(cx, cy);
+    const n = 64, sub = 3;
     ctx.lineCap = 'round';
     for (let i = 0; i < n; i++) {
       const a0 = (i / n) * Math.PI * 2 + t * 0.05, a1 = a0 + (Math.PI * 2 / n) * 0.82;
       const k = Math.sin(i * 2.7) * 0.5 + 0.5;
-      ctx.strokeStyle = `rgba(22,20,18,${0.16 + k * 0.22})`;
-      ctx.lineWidth = (1 + k * 2.4) * dpr;
-      const rr = radius * scale * (1 + Math.sin(i * 1.3) * 0.006);
-      ctx.beginPath(); ctx.ellipse(0, 0, rr, rr * SQ, 0, a0, a1); ctx.stroke();
+      const rr = radius * (1 + Math.sin(i * 1.3) * 0.006);
+      const am = (a0 + a1) / 2, ym = Math.sin(am) * rr, ds = dsz(ym);
+      ctx.strokeStyle = `rgba(22,20,18,${(0.16 + k * 0.22) * (0.7 + 0.3 * Math.min(1, ds))})`;
+      ctx.lineWidth = (1 + k * 2.4) * dpr * ds;
+      ctx.beginPath();
+      for (let j = 0; j <= sub; j++) {
+        const a = a0 + ((a1 - a0) * j) / sub, x = Math.cos(a) * rr, y = Math.sin(a) * rr;
+        if (j) ctx.lineTo(toX(x, y), toY(y)); else ctx.moveTo(toX(x, y), toY(y));
+      }
+      ctx.stroke();
     }
-    ctx.restore();
   }
 
   // ------------------------------------------------------------ sprite cache
@@ -391,66 +408,31 @@ export function createRenderer(canvas) {
     g.fillStyle = mist; g.fillRect(0, H * 0.22, W, H * 0.18);
   }
   function drawStampOn(ctx, s, a, grow) {
-    const tex = stampTex(s.red), w = s.size * scale * grow;
+    const ds = dsz(s.y), tex = stampTex(s.red), w = s.size * scale * grow * ds;
     const k = w / tex.w;
     ctx.save(); ctx.globalAlpha = a;
-    ctx.translate(toX(s.x), toY(s.y) - (s.ground ? 0 : 0.08 * scale));
-    if (s.ground) ctx.scale(1, SQ * 0.55);
+    ctx.translate(toX(s.x, s.y), toY(s.y) - (s.ground ? 0 : 0.08 * scale * ds));
+    if (s.ground) ctx.scale(1, Math.min(0.9, camAspect(cam, s.y) * 0.7));
     ctx.rotate(s.rot); ctx.scale(k * s.flip, k);
     ctx.drawImage(tex.c, -tex.w / 2, -tex.h / 2);
     ctx.restore();
   }
 
-  // painted foe with strip-warp animation: legs shear and stride below the hip,
-  // robes/hair/banners ripple in horizontal strips above it; flyers float
-  function drawFoe(kind, X, Y, face, ph, o) {
-    const fr = foeFrame(kind); if (!fr) return;
-    const img = o.flash ? paintedFlash(fr) : fr.c;
-    const w = fr.w, h = fr.h, ax = fr.ax, ay = fr.ay;
-    const fly = FLY.has(kind);
-    ctx.save();
-    ctx.translate(X, Y); ctx.scale(face, 1);
-    if (o.spawn < 1) ctx.scale(1, 0.75 + 0.25 * o.spawn);
-    if (reduced) { ctx.drawImage(img, -ax, -ay); ctx.restore(); return fr; }
-    const s1 = Math.sin(ph), s2 = Math.sin(ph * 2);
-    let bob = fly ? (Math.sin(ph * 0.7) * 0.03 + 0.02) * h : Math.abs(s1) * h * 0.022;
-    if (kind === 2) bob = Math.max(0, Math.sin(ph)) * h * 0.08; // kappa hops
-    let rock = fly ? 0.06 + Math.sin(ph * 0.7) * 0.03 : s1 * 0.03;
-    if (o.lunge) { ctx.translate(o.lunge * w * 0.12, 0); rock += o.lunge * 0.12; }
-    ctx.rotate(rock);
-    const hip = kind === 11 ? 0 : fly ? 0 : Math.round(h * HIP[kind]);
-    if (hip > 0) {
-      ctx.save();
-      ctx.translate(0, -ay + hip - bob);
-      ctx.transform(1, 0, s1 * 0.16, 1, 0, 0);
-      ctx.scale(1 + s2 * 0.05, 1);
-      ctx.drawImage(img, 0, hip, w, h - hip, -ax, 0, w, h - hip);
-      ctx.restore();
-    }
-    const top = hip || h, N = lite ? 3 : fly || kind === 11 ? 7 : 5, hs = Math.ceil(top / N);
-    const amp = w * (fly ? 0.035 : kind === 11 ? 0.05 : 0.018);
-    for (let i = 0; i < N; i++) {
-      const y0 = i * hs, hh = Math.min(hs + 1, top - y0);
-      if (hh <= 0) break;
-      const q = i / (N - 1);
-      const fall = fly ? q : kind === 11 ? 1 - q : (1 - q) * 0.8 + 0.2;
-      const off = Math.sin(ph * 1.3 - i * 0.75) * amp * fall;
-      ctx.drawImage(img, 0, y0, w, hh, -ax + off, -ay + y0 - bob, w, hh);
-    }
-    ctx.restore();
-    return fr;
-  }
+  // painted foes are animated by the cutout rig in foes.js
   // death: the painting tears into strips that drift apart and fade into the paper
   function drawFoeDeath(k, l) {
     const fr = foeFrame(k.kind); if (!fr) return;
-    const img = l > 0.82 ? paintedFlash(fr) : fr.c;
-    const w = fr.w, h = fr.h, N = reduced ? 1 : lite ? 3 : 6, hs = Math.ceil(h / N), p = 1 - l;
+    const img = l > 0.86 ? paintedFlash(fr) : fr.c;
+    const w = fr.w, h = fr.h, N = reduced ? 1 : lite ? 3 : 6, hs = Math.ceil(h / N);
+    // a short recoil death pose first, then the painting tears apart from it
+    const q = 1 - l, pose = Math.min(1, q / 0.28), p = Math.max(0, (q - 0.28) / 0.72), sz = dsz(k.y);
     ctx.save();
-    ctx.translate(toX(k.x), toY(k.y)); ctx.scale(k.face, 1);
+    ctx.translate(toX(k.x, k.y), toY(k.y)); ctx.scale(k.face * sz, sz);
+    if (!reduced) rig.deathPose(ctx, pose);
     for (let i = 0; i < N; i++) {
       const y0 = i * hs, hh = Math.min(hs + 1, h - y0);
       const dir = (i % 2 ? 1 : -1) * (0.6 + ((i * 37) % 10) / 20);
-      ctx.globalAlpha = Math.max(0, l * (0.95 - i * 0.03));
+      ctx.globalAlpha = Math.max(0, (1 - p) * (0.95 - i * 0.03 * p));
       ctx.save();
       ctx.translate(dir * p * w * 0.35 - p * w * 0.15, -p * h * 0.12 * (1 - i / N) + p * p * h * 0.25);
       ctx.rotate(dir * p * 0.35);
@@ -594,7 +576,8 @@ export function createRenderer(canvas) {
     // the Asura's crit impact frame slows everything around him for a beat
     let dt = dtReal;
     govern(dtReal);
-    if (art) dt = dtReal * anim.update(dtReal, f, en, f[1], { reduced, lite, H: asuraH(), X: cx, Y: cy, dpr, SQ, scale });
+    cam = stage.cam || camDefault;
+    if (art) dt = dtReal * anim.update(dtReal, f, en, f[1], { reduced, lite, H: asuraH(), X: cx, Y: cy, dpr, SQ: cam.q, scale, proj });
     lastDt = dt;
     time += dt;
     for (let i = delayed.length - 1; i >= 0; i--) {
@@ -608,7 +591,12 @@ export function createRenderer(canvas) {
       for (let i = stamps.length - 1; i >= 0; i--) if (stamps[i].ground) stamps.splice(i, 1);
       decals.length = 0; bakeT = 0;
     }
-    { const p = anim.pose; powers.update(dt, f, en, { X: cx, Y: cy, H: asuraH(), scale, SQ, dpr, reduced, lite, dx: art && p ? p.dx || 0 : 0 }); }
+    if (art) rig.update(en, dt, time, (x, y, kind, boss) => {
+      // foe strikes land on the Asura: a fleck of ink, bosses slam the ground
+      if (boss) { stamp(x * 0.45, y * 0.45, 0.2, true, 0.3); stamp(x * 0.5, y * 0.5, 0.16, false, 4, true); if (!reduced) shake = Math.max(shake, 6); }
+      else if (!reduced && !lite) stamp(x * 0.55, y * 0.55, 0.07, R() < 0.3, 0.2);
+    });
+    { const p = anim.pose; powers.update(dt, f, en, { X: cx, Y: cy, H: asuraH(), scale, SQ: cam.q, proj, dpr, reduced, lite, dx: art && p ? p.dx || 0 : 0 }); }
     const t = time;
     ctx.setTransform(1, 0, 0, 1, 0, 0);
     let sx = 0, sy = 0;
@@ -639,7 +627,7 @@ export function createRenderer(canvas) {
       if (d.life <= 0) { decals.splice(i, 1); continue; }
       const r = rng(d.seed), a = Math.min(1, d.life / 3) * 0.5;
       ctx.fillStyle = d.red ? `rgba(160,24,32,${a})` : `rgba(22,20,18,${a})`;
-      const X = toX(d.x), Y = toY(d.y), s = d.s * 6 * dpr;
+      const X = toX(d.x, d.y), Y = toY(d.y), s = d.s * 6 * dpr * dsz(d.y);
       for (let k = 0; k < 7; k++) { ctx.beginPath(); ctx.ellipse(X + (r() - 0.5) * s * 2.4, Y + (r() - 0.5) * s, s * (0.3 + r() * 0.6), s * (0.2 + r() * 0.4), 0, 0, Math.PI * 2); ctx.fill(); }
     }
 
@@ -649,14 +637,14 @@ export function createRenderer(canvas) {
     // dissolving corpses: the painting tears into strips and fades into the paper
     for (let i = corpses.length - 1; i >= 0; i--) {
       const k = corpses[i];
-      if (k.hold > 0) { k.hold -= dt; if (art) drawFoe(k.kind, toX(k.x), toY(k.y), k.face, time * 4, { flash: true, spawn: 1 }); continue; }
+      if (k.hold > 0) { k.hold -= dt; if (art) rig.draw(ctx, -1, k.kind, toX(k.x, k.y), toY(k.y), dsz(k.y), k.face, { flash: true, spawn: 1, quality: reduced ? 'reduced' : lite ? 'lite' : 'full' }); continue; }
       k.life -= dt;
       if (k.life <= 0) { corpses.splice(i, 1); continue; }
       const l = k.life / k.max;
       if (art) drawFoeDeath(k, l);
       else {
         const spr = enemySprite(k.kind, 0, enemyPx(k.kind));
-        ctx.save(); ctx.globalAlpha = l * 0.9; ctx.translate(toX(k.x), toY(k.y));
+        ctx.save(); ctx.globalAlpha = l * 0.9; ctx.translate(toX(k.x, k.y), toY(k.y));
         ctx.scale(k.face * (1 + (1 - l) * 0.35), 0.35 + 0.65 * l);
         ctx.drawImage(l > 0.7 ? flashOf(spr) : spr.c, -spr.ox, -spr.oy);
         ctx.restore();
@@ -671,17 +659,18 @@ export function createRenderer(canvas) {
       if (r.life <= 0) { rings.splice(i, 1); continue; }
       r.r += (r.max - r.r) * Math.min(1, dt * 9);
       if (art) {
-        const tex = arcTex(r.red), k = (r.r * scale) / tex.r;
-        ctx.save(); ctx.translate(cx, cy); ctx.scale(k, k * SQ); ctx.rotate(r.rot + (1 - r.life) * (r.red ? 2.2 : -1.6));
+        const tex = arcTex(r.red), cb = circleBox(cam, r.r), k = cb.rx / tex.r;
+        ctx.save(); ctx.translate(cx, cb.cy); ctx.scale(k, cb.ry / tex.r); ctx.rotate(r.rot + (1 - r.life) * (r.red ? 2.2 : -1.6));
         ctx.globalAlpha = Math.min(1, r.life * (r.red ? 1.6 : 1.2));
         ctx.drawImage(tex.c, -tex.cx, -tex.cy);
         ctx.restore(); ctx.globalAlpha = 1;
         continue;
       }
-      ctx.save(); ctx.translate(cx, cy);
+      const cb = circleBox(cam, r.r);
+      ctx.save(); ctx.translate(cx, cb.cy);
       ctx.strokeStyle = r.red ? `rgba(179,32,42,${r.life})` : `rgba(22,20,18,${r.life * 0.8})`;
       ctx.lineWidth = (r.red ? 7 : 3) * dpr * (0.4 + r.life);
-      ctx.beginPath(); ctx.ellipse(0, 0, r.r * scale, r.r * scale * SQ, 0, 0, Math.PI * 2); ctx.stroke();
+      ctx.beginPath(); ctx.ellipse(0, 0, cb.rx, cb.ry, 0, 0, Math.PI * 2); ctx.stroke();
       ctx.restore();
     }
 
@@ -694,7 +683,7 @@ export function createRenderer(canvas) {
     const drawEnemy = (i) => {
       const o = i * 11;
       const kind = en[o + 1], x = en[o + 2], y = en[o + 3], hp = en[o + 4], size = en[o + 5], age = en[o + 6], flash = en[o + 7], phase = en[o + 8], boss = en[o + 9], slow = en[o + 10];
-      const X = toX(x), Y = toY(y), px = enemyPx(kind);
+      const X = toX(x, y), Y = toY(y), sz = dsz(y), px = enemyPx(kind) * sz;
       const fade = Math.min(1, age / 0.6);
       const face = x > 0 ? -1 : 1;
       const d = Math.hypot(x, y);
@@ -706,26 +695,24 @@ export function createRenderer(canvas) {
       ctx.globalAlpha = fade;
       // soft wash shadow
       ctx.fillStyle = 'rgba(22,20,18,.2)';
-      ctx.beginPath(); ctx.ellipse(X, Y, px * (fly ? 0.2 : 0.3), px * 0.075, 0, 0, Math.PI * 2); ctx.fill();
+      { const sw = px * (fly ? 0.2 : 0.3); ctx.beginPath(); ctx.ellipse(X, Y, sw, Math.max(sw * camAspect(cam, y) * 0.55, px * 0.04), 0, 0, Math.PI * 2); ctx.fill(); }
       if (art) {
-        const ph = reduced ? phase : (melee ? t * 3 : t * cad * (slow > 0 ? 0.4 : 1)) + phase;
-        const lunge = melee && !reduced ? Math.max(0, Math.sin(t * 9 + phase)) : 0;
         if (kind === 6 || kind === 12) ctx.globalAlpha = fade * 0.9;
-        const fr = drawFoe(kind, X, Y, face, ph, { flash: flash > 0, spawn: fade, lunge });
-        if (fr) topY = Y - fr.ay - 2 * dpr;
+        const R = rig.draw(ctx, en[o], kind, X, Y, sz, face, { flash: flash > 0, spawn: fade, age, quality: reduced ? 'reduced' : lite ? 'lite' : 'full' });
+        if (R) topY = Y - R.ay * sz * 1.04 - 2 * dpr;
       } else {
         const ph = reduced ? phase : (melee ? t * 3 : t * cad * (slow > 0 ? 0.4 : 1)) + phase;
         const fr = Math.floor(((((ph / TAU) % 1) + 1) % 1) * FRAMES) % FRAMES;
         const spr = enemySprite(kind, fr, px);
         ctx.translate(X + (melee && !reduced ? Math.sin(t * 9 + phase) * px * 0.04 * -Math.sign(x) : 0), Y);
-        ctx.scale(face, 1);
+        ctx.scale(face * sz, sz);
         if (kind === 6 || kind === 12) ctx.globalAlpha = fade * 0.88;
         ctx.drawImage(flash > 0 ? flashOf(spr) : spr.c, -spr.ox, -spr.oy);
       }
       ctx.restore();
       // hp bar
       if (hp < 0.999 || boss) {
-        const bw = Math.max(22 * dpr, px * (boss ? 0.9 : 0.6)), bh = (boss ? 5 : 3.2) * dpr;
+        const bw = Math.max(20 * dpr, px * (boss ? 0.9 : 0.6)), bh = (boss ? 5 : 3.2) * dpr * Math.max(0.8, Math.min(1.2, sz));
         const by = topY - 4 * dpr;
         ctx.globalAlpha = fade;
         ctx.fillStyle = 'rgba(236,230,216,.85)'; ctx.fillRect(X - bw / 2, by, bw, bh);
@@ -746,7 +733,7 @@ export function createRenderer(canvas) {
       const w = wisps[i]; w.life -= dt; w.h += dt * 0.09; w.x += Math.sin(time * 2 + i) * dt * 0.02;
       if (w.life <= 0) { wisps.splice(i, 1); continue; }
       ctx.fillStyle = w.red ? `rgba(179,32,42,${w.life * 0.18})` : `rgba(22,20,18,${w.life * 0.08})`;
-      ctx.beginPath(); ctx.arc(toX(w.x), toY(w.y) - w.h * scale, w.r * (1.8 - w.life), 0, Math.PI * 2); ctx.fill();
+      ctx.beginPath(); ctx.arc(toX(w.x, w.y), toY(w.y) - w.h * scale * dsz(w.y), w.r * (1.8 - w.life), 0, Math.PI * 2); ctx.fill();
     }
     // painted splatter bursts in the air at the point of impact
     if (art) for (let i = stamps.length - 1; i >= 0; i--) {
@@ -762,7 +749,7 @@ export function createRenderer(canvas) {
       const sw = swipes[i]; sw.life -= dt;
       if (sw.life <= 0) { swipes.splice(i, 1); continue; }
       const ox = cx, oy = cy - 0.17 * scale;
-      const a = Math.atan2(toY(sw.y) - 0.07 * scale - oy, toX(sw.x) - ox);
+      const a = Math.atan2(toY(sw.y) - 0.07 * scale * dsz(sw.y) - oy, toX(sw.x, sw.y) - ox);
       const p = 1 - sw.life / 0.17, rr = 0.15 * scale * (1 + p * 0.5);
       const span = 1.1, a0 = a - span * (sw.flip ? -1 : 1), a1 = a + span * (sw.flip ? -1 : 1);
       const pts = [];
@@ -775,7 +762,7 @@ export function createRenderer(canvas) {
     for (let i = slashes.length - 1; i >= 0; i--) {
       const s = slashes[i]; s.life -= dt;
       if (s.life <= 0) { slashes.splice(i, 1); continue; }
-      const X = toX(s.x), Y = toY(s.y) - 0.07 * scale, L = (s.big ? 0.1 : 0.065) * scale;
+      const X = toX(s.x, s.y), Y = toY(s.y) - 0.07 * scale * dsz(s.y), L = (s.big ? 0.1 : 0.065) * scale * dsz(s.y);
       const p = 1 - s.life / 0.22;
       ctx.save(); ctx.translate(X, Y); ctx.rotate(s.ang);
       ctx.fillStyle = s.red ? `rgba(179,32,42,${s.life * 4})` : `rgba(22,20,18,${s.life * 4})`;
@@ -792,15 +779,15 @@ export function createRenderer(canvas) {
         // painted droplet: a tiny rotated splatter stamp
         // stretched along its flight so it reads as a flung drop, not a star
         const tex = dropTex(p.red), k = (p.r * 4.6) / tex.w;
-        const rot = Math.atan2(p.vy * SQ - p.vz * 0.4, p.vx), co = Math.cos(rot), si = Math.sin(rot);
+        const rot = Math.atan2(p.vy * cam.q - p.vz * 0.4, p.vx), co = Math.cos(rot), si = Math.sin(rot);
         const ax = k * 1.7, ay = k * 0.75;
         ctx.globalAlpha = Math.min(1, p.life * 2);
-        ctx.setTransform(co * ax, si * ax, -si * ay, co * ay, toX(p.x) + sx, toY(p.y) - p.z * scale * 0.4 - 0.06 * scale + sy);
+        ctx.setTransform(co * ax, si * ax, -si * ay, co * ay, toX(p.x, p.y) + sx, toY(p.y) - (p.z * 0.4 + 0.06) * scale * dsz(p.y) + sy);
         ctx.drawImage(tex.c, -tex.w / 2, -tex.h / 2);
         continue;
       }
       ctx.fillStyle = p.red ? `rgba(179,32,42,${Math.min(1, p.life * 2)})` : `rgba(22,20,18,${Math.min(1, p.life * 2)})`;
-      ctx.beginPath(); ctx.ellipse(toX(p.x), toY(p.y) - p.z * scale * 0.4 - 0.06 * scale, p.r * 1.8, p.r * 0.8, Math.atan2(p.vy * SQ - p.vz * 0.4, p.vx), 0, Math.PI * 2); ctx.fill();
+      ctx.beginPath(); ctx.ellipse(toX(p.x, p.y), toY(p.y) - (p.z * 0.4 + 0.06) * scale * dsz(p.y), p.r * 1.8, p.r * 0.8, Math.atan2(p.vy * cam.q - p.vz * 0.4, p.vx), 0, Math.PI * 2); ctx.fill();
     }
     ctx.setTransform(1, 0, 0, 1, sx, sy); ctx.globalAlpha = 1;
     stage.drawAmbient(ctx, false); ctx.setTransform(1, 0, 0, 1, sx, sy);
@@ -814,8 +801,8 @@ export function createRenderer(canvas) {
       ctx.font = `${Math.round(tx.size * dpr * pop)}px Hand, sans-serif`;
       ctx.globalAlpha = Math.min(1, tx.life * 2.5);
       ctx.lineWidth = 3 * dpr; ctx.strokeStyle = 'rgba(236,230,216,.9)';
-      ctx.strokeText(tx.txt, toX(tx.x), toY(tx.y) - 0.1 * scale);
-      ctx.fillStyle = tx.color; ctx.fillText(tx.txt, toX(tx.x), toY(tx.y) - 0.1 * scale);
+      ctx.strokeText(tx.txt, toX(tx.x, tx.y), toY(tx.y) - 0.1 * scale * dsz(tx.y));
+      ctx.fillStyle = tx.color; ctx.fillText(tx.txt, toX(tx.x, tx.y), toY(tx.y) - 0.1 * scale * dsz(tx.y));
     }
     ctx.globalAlpha = 1;
     ctx.setTransform(1, 0, 0, 1, 0, 0);
