@@ -7,6 +7,7 @@ from PIL import Image
 from scipy import ndimage as ndi
 
 import sys
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 SRC=sys.argv[1] if len(sys.argv) > 1 else 'art-src'
 OUT=os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'assets', 'art')
 os.makedirs(OUT, exist_ok=True)
@@ -14,58 +15,24 @@ os.makedirs(OUT, exist_ok=True)
 def disk(r):
     y,x=np.ogrid[-r:r+1,-r:r+1]; return x*x+y*y<=r*r
 
+from keying import key_array
+from keying import drop_paper
 def key(path, report=None):
-    """Key ink-on-paper to RGBA.
-
-    The ink mask is closed and its holes filled, but enclosed holes that are
-    paper (gaps between legs, arm and body, weapon and hand, hair strands) are
-    keyed out again: a hole counts as paper when its mean darkness is close to
-    the paper tone (large holes) or almost pure white (small ones). Light painted
-    areas (white robes, tengu feathers, teeth, eye glints) read as a light grey
-    wash or are tiny, so they stay opaque. Paper slivers bridged by the closing
-    get alpha from their own darkness instead of being forced opaque, and the
-    cut edges are eroded and feathered so no halo is left behind.
-    """
-    im=np.asarray(Image.open(path).convert('RGB')).astype(np.float32)
-    mn=im.min(axis=2); d=255-mn
-    ink=d>24
-    lab,n=ndi.label(ink); sizes=ndi.sum(ink,lab,range(1,n+1))
-    keep=np.zeros(n+1,bool); keep[1:]=sizes>=8; ink=keep[lab]
-    closed=ndi.binary_closing(ink,structure=disk(4))
-    filled=ndi.binary_fill_holes(closed)
-    holes=filled&~closed
-    hl,hn=ndi.label(holes)
-    paper_hole=np.zeros(hn+1,bool)
-    if hn:
-        idx=np.arange(1,hn+1)
-        area=ndi.sum(holes,hl,idx); md=ndi.mean(d,hl,idx)
-        paper_hole[1:]=((area>=150)&(md<6.0))|((area>=25)&(md<3.5))
-    gap=paper_hole[hl]
-    # grow the paper gaps through the closing seam into the bridged slivers
-    gap=ndi.binary_dilation(gap,structure=disk(3))&~ink
-    fg=filled&~gap
-    # everything stays opaque except paper slivers right next to a keyed gap
-    solid=fg&(ink|~ndi.binary_dilation(gap,structure=disk(6)))
-    # bare paper bridged by the closing between strands (hair, frayed robes,
-    # splatter) is not paint either, unless it sits inside a protected light area
-    kept=ndi.binary_dilation(holes&~gap,structure=disk(3))
-    solid&=ink|kept|(d>=5)
-    inner=ndi.binary_erosion(fg,iterations=2)&solid
-    a0=np.clip(d/255.0,0,1)
-    a_edge=np.clip(a0*1.6,0,1)
-    alpha=np.where(inner,1.0,np.where(fg,a_edge,0.0))
-    # erode + feather the alpha along keyed gaps so no paper fringe remains
-    near_gap=ndi.binary_dilation(gap,structure=disk(3))
-    er=ndi.grey_erosion(alpha,size=(3,3))
-    alpha=np.where(near_gap,np.minimum(alpha,er*0.5+alpha*0.5),alpha)
-    alpha=np.where(near_gap|~inner,ndi.gaussian_filter(alpha,0.7),alpha)
-    if report is not None: report.append((os.path.basename(path),int(paper_hole.sum()),int(gap.sum())))
-    # un-blend edge colours from the white paper so there is no halo
-    safe=np.maximum(a0,0.04)[...,None]
-    unbl=np.clip((im-255*(1-a0[...,None]))/safe,0,255)
-    col=np.where((inner)[...,None],im,unbl)
-    col=col*np.array([241,235,222],np.float32)/255.0
-    rgba=np.dstack([col,np.clip(alpha,0,1)*255]).astype(np.uint8)
+    src = Image.open(path).convert('RGB')
+    rgba = key_array(src, report, os.path.basename(path))
+    # second pass: paper flecks left in the ground splash under the feet. Only the
+    # bottom of each figure is touched so painted white robes/feathers stay intact.
+    ys = np.where(rgba[..., 3].max(axis=1) > 20)[0]
+    if len(ys) and not os.path.basename(path).startswith('fx_'):
+        y0, y1 = ys.min(), ys.max(); h = y1 - y0
+        b = os.path.basename(path)
+        if b.startswith('a_') or b.split('_')[0] in ('e0', 'e1', 'e2', 'e3', 'e4', 'e7', 'e8', 'e11'):
+            # figures with no painted-white cloth/feathers (the Asura, ashigaru, ninja,
+            # kappa, ronin, samurai, oni, oni warlord, orochi): paper pockets trapped between hair
+            # strands, sash tails and motion swirls go everywhere (dense face/teeth stay)
+            rgba = drop_paper(rgba, src)
+        else:
+            rgba = drop_paper(rgba, src, band=(y1 - 0.16 * h, y1 - 0.08 * h))
     return Image.fromarray(rgba,'RGBA')
 
 def crop(img,pad=4):

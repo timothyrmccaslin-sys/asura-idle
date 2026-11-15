@@ -15,29 +15,26 @@ LIFT = {'oni': (0.42, 0.0), 'tengu': (0.3, 0.0), 'shogun': (0.3, 0.0), 'orochi':
 def disk(r):
     y, x = np.ogrid[-r:r + 1, -r:r + 1]; return x * x + y * y <= r * r
 
-def key(im):
-    im = im.astype(np.float32); d = 255 - im.min(axis=2)
-    ink = d > 24
-    lab, n = ndi.label(ink); sizes = ndi.sum(ink, lab, range(1, n + 1))
-    keep = np.zeros(n + 1, bool); keep[1:] = sizes >= 8; ink = keep[lab]
-    closed = ndi.binary_closing(ink, structure=disk(3))
-    # fill only small enclosed holes (eyes, lantern panes, bone highlights); big gaps
-    # such as the air between willow strands stay transparent
-    holes = ndi.binary_fill_holes(closed) & ~closed
-    hl, hn = ndi.label(holes)
-    if hn:
-        hs = ndi.sum(holes, hl, range(1, hn + 1)); small = np.zeros(hn + 1, bool); small[1:] = hs < 900
-        fg = closed | small[hl]
-    else:
-        fg = closed
-    inner = ndi.binary_erosion(fg, iterations=2)
-    a0 = np.clip(d / 255.0, 0, 1)
-    # paper-white inside a prop becomes a light veil rather than an opaque white patch
-    alpha = np.where(inner, np.clip(0.62 + a0 * 4, 0, 1), np.where(fg, np.clip(a0 * 1.6, 0, 1), 0.0))
-    safe = np.maximum(a0, 0.04)[..., None]
-    unbl = np.clip((im - 255 * (1 - a0[..., None])) / safe, 0, 255)
-    col = np.where(inner[..., None], im, unbl) * np.array([241, 235, 222], np.float32) / 255.0
-    return np.dstack([col, alpha * 255]).astype(np.uint8)
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from keying import key_array, drop_paper
+
+# props whose enclosed white areas are painted (banner cloth, plaster wall), not paper
+PAINTED_WHITE = {('shogun', 1), ('shogun', 5)}
+
+def key(im, painted_white=False):
+    # same keying as the characters: enclosed paper gaps (between willow strands,
+    # torii posts, grass) are keyed out, edges are un-blended from the paper and
+    # the alpha is eroded and feathered, so props carry no white veil or halo
+    rgba = key_array(im)
+    if painted_white:
+        src = np.asarray(im).astype(np.float32)
+        sil = ndi.binary_fill_holes(ndi.binary_closing(rgba[..., 3] > 128, structure=disk(4)))
+        sil = ndi.binary_erosion(sil, iterations=2)
+        a = np.maximum(rgba[..., 3], sil * 255)
+        col = np.where((sil & (rgba[..., 3] < 250))[..., None], src * np.array([241, 235, 222]) / 255.0, rgba[..., :3])
+        rgba = np.dstack([col, a]).clip(0, 255).astype(np.uint8)
+        return drop_paper(rgba, im, strength=0.0)
+    return drop_paper(rgba, im)
 
 meta = {}
 for t in THEMES:
@@ -61,7 +58,7 @@ for t in THEMES:
     for gy in range(2):
         for gx in range(3):
             cell = sheet[gy * sh // 2:(gy + 1) * sh // 2, gx * sw // 3:(gx + 1) * sw // 3]
-            rgba = key(cell)
+            rgba = key(cell, (t, gy * 3 + gx) in PAINTED_WHITE)
             al = rgba[..., 3]
             # keep only the biggest blob cluster (drop stray specks from neighbours)
             m = ndi.binary_dilation(al > 20, iterations=6)

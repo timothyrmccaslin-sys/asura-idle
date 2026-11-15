@@ -15,6 +15,37 @@ mod b64;
 
 pub const SAVE_VERSION: u32 = 1;
 const SPAWN_RADIUS: f64 = 1.2;
+/// Half-width of the keep-clear cones on the screen's vertical axis (15° total
+/// each): +y points toward the camera (bottom of the screen), -y away (top).
+/// Nothing spawns or approaches inside them, so foes never stand in front of
+/// the Asura, and he never hides a foe coming down from the top.
+const CONE_HALF: f64 = 7.5 * std::f64::consts::PI / 180.0;
+/// Below this distance foes are in the melee crush and may drift anywhere.
+const CONE_FREE_R: f64 = 0.35;
+
+/// Uniform angle over the allowed arcs (everything outside the two cones).
+fn spawn_angle(u: f64) -> f64 {
+    use std::f64::consts::PI;
+    let arc = PI - 2.0 * CONE_HALF; // each side: right half and left half
+    let t = u * 2.0 * arc;
+    if t < arc { -PI / 2.0 + CONE_HALF + t } else { PI / 2.0 + CONE_HALF + (t - arc) }
+}
+/// Angular distance (radians) from the vertical axis, 0..PI/2.
+fn off_axis(x: f64, y: f64) -> f64 {
+    let a = y.atan2(x).abs(); // 0..PI
+    (a - std::f64::consts::FRAC_PI_2).abs()
+}
+/// Rotate a point out of a cone to its nearest edge, keeping its distance.
+fn clear_cone(x: f64, y: f64) -> (f64, f64) {
+    use std::f64::consts::FRAC_PI_2;
+    if off_axis(x, y) >= CONE_HALF { return (x, y); }
+    let d = (x * x + y * y).sqrt();
+    let side = if x >= 0.0 { 1.0 } else { -1.0 };
+    let up = if y >= 0.0 { 1.0 } else { -1.0 };
+    let a = up * (FRAC_PI_2 - CONE_HALF * 1.0001);
+    let a = if side > 0.0 { a } else { up * std::f64::consts::PI - a };
+    (d * a.cos(), d * a.sin())
+}
 const ASURA_RADIUS: f64 = 0.075;
 pub const N_UP: usize = 10;
 pub const N_SHOP: usize = 7;
@@ -438,7 +469,7 @@ impl Game {
         let w = self.s.wave;
         let kind = if boss { 8 + ((w / 10 - 1) % 5) as usize } else { self.pick_kind() };
         let k = KINDS[kind];
-        let a = self.rng.next() * std::f64::consts::TAU;
+        let a = spawn_angle(self.rng.next());
         let r = SPAWN_RADIUS + self.rng.next() * 0.12;
         let hp = self.enemy_hp(w) * k.hp * (0.92 + self.rng.next() * 0.16);
         let e = Enemy {
@@ -596,6 +627,14 @@ impl Game {
                     self.enemies[j].x += ux;
                     self.enemies[j].y += uy;
                 }
+            }
+        }
+        // jostling must not walk an approaching foe into the keep-clear cones
+        for e in self.enemies.iter_mut() {
+            if e.x * e.x + e.y * e.y > CONE_FREE_R * CONE_FREE_R {
+                let (x, y) = clear_cone(e.x, e.y);
+                e.x = x;
+                e.y = y;
             }
         }
         if hurt > 0.0 {
@@ -1251,6 +1290,45 @@ mod tests {
         assert_eq!(h.s.souls, g.s.souls);
         assert_eq!(h.s.up, g.s.up);
         assert!(!h.import_save("garbage!!"));
+    }
+
+    #[test]
+    fn spawns_avoid_vertical_cones() {
+        // direct sampling of the angle mapping, edges included
+        for i in 0..=100_000 {
+            let a = spawn_angle(i as f64 / 100_000.0 * 0.999_999_9);
+            assert!(off_axis(a.cos(), a.sin()) >= CONE_HALF - 1e-9, "angle {} in cone", a.to_degrees());
+        }
+        // and the allowed arcs are covered evenly (no clumping at cone edges)
+        let mut bins = [0u32; 36];
+        let mut g = Game::new(11.0);
+        for n in 0..40_000 {
+            if n % 40 == 0 { g.enemies.clear(); }
+            g.s.wave = if n % 9 == 0 { 10 + (n as u32 % 5) * 10 } else { 1 + n as u32 % 60 };
+            g.spawn(n % 9 == 0);
+            let e = g.enemies.last().unwrap();
+            assert!(off_axis(e.x, e.y) >= CONE_HALF - 1e-9, "spawn at {:.2}°", e.y.atan2(e.x).to_degrees());
+            let deg = e.y.atan2(e.x).to_degrees().rem_euclid(360.0);
+            bins[(deg / 10.0) as usize % 36] += 1;
+        }
+        // bins fully inside the allowed arcs should hold about 1/(360-30)*10 of the spawns
+        let full: Vec<u32> = (0..36).filter(|b| ![8, 9, 26, 27].contains(b)).map(|b| bins[b]).collect();
+        let mean = full.iter().sum::<u32>() as f64 / full.len() as f64;
+        for c in &full { assert!((*c as f64 - mean).abs() < mean * 0.15, "uneven bins {:?}", bins); }
+        // a simulated fight: approaching foes (outside the melee crush) stay out of the cones
+        let mut g = Game::new(5.0);
+        g.debug_set_wave(40);
+        let mut seen = 0usize;
+        for _ in 0..6000 {
+            g.tick(1.0 / 30.0);
+            seen += g.enemies.len();
+            for e in &g.enemies {
+                if (e.x * e.x + e.y * e.y).sqrt() > CONE_FREE_R + 1e-6 {
+                    assert!(off_axis(e.x, e.y) >= CONE_HALF - 1e-6, "foe drifted into a cone at d={:.2}", (e.x * e.x + e.y * e.y).sqrt());
+                }
+            }
+        }
+        assert!(seen > 10_000, "the fight should have had foes on the field ({})", seen);
     }
 
     #[test]

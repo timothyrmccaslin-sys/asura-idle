@@ -5,6 +5,7 @@
 // particles. So each block is unique but identical after a reload. The static
 // scene is baked once per block into an offscreen canvas; block changes bleed in
 // with an ink-wash transition and a brush-lettered banner.
+import { createWeather } from './weather.js';
 import { PERSP, fitImage, makeCam, lerpCam, px as camX, py as camY, size as camSize, unproject, circleBox, aspect } from './cam.js';
 const BASE = new URL('./assets/themes/', import.meta.url).href;
 const PAPER = '#ece6d8';
@@ -12,7 +13,7 @@ const SQ = 0.8;
 
 export const THEMES = [
   { key: 'oni', boss: 'Oni Warlord', names: ['Gate of Ashes', 'Ember Hollow', 'The Cinder Torii', 'Bone Furnace'], amb: ['embers', 'ash'], opt: [['smoke', 0.45]], tint: 'rgba(120,20,20,.05)' },
-  { key: 'tengu', boss: 'Tengu King', names: ['Peaks of the Tengu', 'Pine Wind Ridge', 'Cloudwalk Crag', 'Feather Summit'], amb: ['feathers', 'mist'], opt: [['rain', 0.3]], tint: null },
+  { key: 'tengu', boss: 'Tengu King', names: ['Peaks of the Tengu', 'Pine Wind Ridge', 'Cloudwalk Crag', 'Feather Summit'], amb: ['feathers', 'leaves', 'mist'], opt: [['rain', 0.3]], tint: null },
   { key: 'shogun', boss: 'The Shogun', names: ["The Shogun's Courtyard", 'Blossom Keep', 'Hall of Banners', 'Lantern Gate'], amb: ['petals'], opt: [['mist', 0.3], ['rain', 0.25]], tint: null },
   { key: 'orochi', boss: 'Orochi', names: ['Delta of Eight Coils', 'Reedmire', 'Serpent Fen', 'Drowned Shallows'], amb: ['mist', 'fireflies'], opt: [['rain', 0.5]], tint: null },
   { key: 'onryo', boss: 'Onryō Queen', names: ['Shrine of the Pale Moon', 'Willow Graves', 'Lantern Hollow', 'Moonless Precinct'], amb: ['wisps', 'fireflies'], opt: [['mist', 0.5]], tint: 'rgba(20,22,40,.06)' },
@@ -45,6 +46,10 @@ export function createStage() {
   const parts = [];
   let ambient = [], spawnAcc = 0;
   const sprites = {};
+  const wx = createWeather();
+  let lastQ = 'full';
+  // props that carry a flame: frame index -> light height (fraction of prop height)
+  const LANTERNS = { onryo: { 0: 0.6 }, shogun: { 0: 0.66 } };
 
   function loadMeta() { return metaP || (metaP = fetch(BASE + 'themes.json').then((r) => r.json()).then((m) => (meta = m))); }
   function loadTheme(i) {
@@ -127,6 +132,7 @@ export function createStage() {
       placed.push({ X, Y, dep, k, flip, sz });
     }
     placed.sort((a, b) => a.Y - b.Y);
+    const lights = [];
     for (const p of placed) {
       const f = fr[p.k], depth = p.dep;
       const h = 0.3 * scale * depth * p.sz, k = h / f.h, w = f.w * k;
@@ -135,6 +141,8 @@ export function createStage() {
       g.save(); g.translate(p.X, p.Y); if (p.flip) g.scale(-1, 1);
       g.drawImage(art.props, f.x, f.y, f.w, f.h, -w / 2, -f.ay * k, w, f.h * k);
       g.restore();
+      const lf = (LANTERNS[T.key] || {})[p.k];
+      if (lf) lights.push({ x: p.X, y: p.Y - f.ay * k * lf, gy: p.Y, r: h * 0.95 });
     }
     // keep the combat circle calm and readable
     const cb = circleBox(cam, 1.05);
@@ -148,6 +156,8 @@ export function createStage() {
     // per-block ambient set
     ambient = [...T.amb];
     for (const [k, p] of T.opt) if (r() < p) ambient.push(k);
+    // weather/light plan on its own seeded stream (keeps the scene layout stable)
+    wx.plan(T.key, b * 104729 + 77, { lights, rain: ambient.includes('rain') });
     banner = { t: 0, title: T.names[(r() * T.names.length) | 0], sub: `Waves ${b * 10 + 1}–${b * 10 + 10} · ${T.boss} awaits` };
     return c;
   }
@@ -168,6 +178,9 @@ export function createStage() {
       c = mk(30 * d, 10 * d); const g = c.getContext('2d');
       g.fillStyle = 'rgba(22,20,18,.85)'; g.beginPath(); g.moveTo(1 * d, 5 * d); g.quadraticCurveTo(14 * d, -1 * d, 29 * d, 4 * d); g.quadraticCurveTo(15 * d, 9 * d, 1 * d, 5 * d); g.fill();
       g.strokeStyle = 'rgba(236,230,216,.5)'; g.lineWidth = 0.6 * d; g.beginPath(); g.moveTo(2 * d, 5 * d); g.lineTo(28 * d, 4 * d); g.stroke();
+    } else if (kind === 'leaf') {
+      c = mk(12 * d, 6 * d); const g = c.getContext('2d');
+      g.fillStyle = 'rgba(36,40,30,.85)'; g.beginPath(); g.moveTo(0.5 * d, 3 * d); g.quadraticCurveTo(6 * d, -1 * d, 11.5 * d, 3 * d); g.quadraticCurveTo(6 * d, 7 * d, 0.5 * d, 3 * d); g.fill();
     } else if (kind === 'petal') {
       c = mk(10 * d, 7 * d); const g = c.getContext('2d');
       g.fillStyle = 'rgba(196,52,58,.85)'; g.beginPath(); g.ellipse(5 * d, 3.5 * d, 4.6 * d, 2.6 * d, 0, 0, Math.PI * 2); g.fill();
@@ -190,8 +203,8 @@ export function createStage() {
     return (sprites[kind] = c);
   }
   const CFG = { // per-type: share of the pool, speed etc. (px/s are relative to H)
-    embers: { n: 16, k: 'ember' }, ash: { n: 16, k: 'ash' }, feathers: { n: 7, k: 'feather' }, petals: { n: 18, k: 'petal' },
-    fireflies: { n: 12, k: 'firefly' }, wisps: { n: 7, k: 'wisp' }, mist: { n: 4, k: 'mist' }, smoke: { n: 4, k: 'smoke' }, rain: { n: 40, k: null },
+    embers: { n: 16, k: 'ember' }, ash: { n: 16, k: 'ash' }, feathers: { n: 7, k: 'feather' }, leaves: { n: 9, k: 'leaf' }, petals: { n: 18, k: 'petal' },
+    fireflies: { n: 12, k: 'firefly' }, wisps: { n: 7, k: 'wisp' }, mist: { n: 4, k: 'mist' }, smoke: { n: 4, k: 'smoke' }, rain: { n: 64, k: null },
   };
   function spawn(type, anywhere) {
     const { W, H } = V, R = Math.random;
@@ -201,6 +214,7 @@ export function createStage() {
     switch (type) {
       case 'embers': p.y = anywhere ? R() * H : H * (0.6 + R() * 0.45); p.vy = -H * (0.05 + R() * 0.07); p.vx = (R() - 0.5) * H * 0.03; p.max = 3 + R() * 4; break;
       case 'ash': p.vy = H * (0.025 + R() * 0.03); p.vx = H * (0.01 + R() * 0.02); break;
+      case 'leaves': p.vy = H * (0.035 + R() * 0.03); p.vx = (R() < 0.5 ? -1 : 1) * H * 0.02; p.vr = (R() - 0.5) * 7; p.max = 9; break;
       case 'feathers': p.vy = H * (0.03 + R() * 0.03); p.vx = (R() < 0.5 ? -1 : 1) * H * 0.03; p.max = 10; break;
       case 'petals': p.vy = H * (0.04 + R() * 0.04); p.vx = H * (0.02 + R() * 0.03); p.vr = (R() - 0.5) * 6; break;
       case 'fireflies': p.y = H * (0.25 + R() * 0.75); p.vx = (R() - 0.5) * H * 0.02; p.vy = (R() - 0.5) * H * 0.02; p.max = 5 + R() * 5; break;
@@ -227,22 +241,31 @@ export function createStage() {
       if (!ambient.includes(p.type)) { p.on = false; continue; }
       p.life += dt; if (p.life > p.max) { p.on = false; continue; }
       const sway = Math.sin(p.life * 1.6 + p.ph);
-      p.x += (p.vx + (p.type === 'petals' || p.type === 'feathers' ? sway * V.H * 0.03 : 0)) * dt;
+      const blown = p.type === 'petals' || p.type === 'feathers' || p.type === 'leaves';
+      p.x += (p.vx + (blown ? sway * V.H * 0.03 : 0) + (blown || p.type === 'mist' ? wx.gust * V.H * (p.type === 'mist' ? 0.08 : 0.55) : 0)) * dt;
+      if (blown && wx.gust > 0.1) p.vr += (Math.random() - 0.5) * 8 * wx.gust * dt;
       p.y += p.vy * dt; p.rot += p.vr * dt;
       if (p.type === 'fireflies') { p.vx += (Math.random() - 0.5) * V.H * 0.06 * dt; p.vy += (Math.random() - 0.5) * V.H * 0.06 * dt; }
       if (p.y > V.H * 1.08 || p.y < -V.H * 0.12 || p.x < -V.W * 0.4 || p.x > V.W * 1.4) p.on = false;
     }
   }
+  function curCam() {
+    if (!sceneCam) return null;
+    if (!prev || !prevCam) return sceneCam;
+    const p = Math.min(1, transT / transDur), e = p * p * (3 - 2 * p);
+    return lerpCam(prevCam, sceneCam, e);
+  }
   function drawAmbient(ctx, back) {
     if (!V) return;
+    if (back) { wx.drawBack(ctx, curCam(), scene, lastQ); ctx.globalAlpha = 1; ctx.globalCompositeOperation = 'source-over'; }
     for (const p of parts) {
       if (!p.on) continue;
       const isBack = p.type === 'mist' || p.type === 'smoke';
       if (isBack !== back) continue;
       const fade = Math.min(1, p.life / 0.8, (p.max - p.life) / 1.2);
       if (p.type === 'rain') {
-        ctx.globalAlpha = 0.35 * fade; ctx.strokeStyle = 'rgba(40,38,36,.8)'; ctx.lineWidth = V.dpr;
-        ctx.beginPath(); ctx.moveTo(p.x, p.y); ctx.lineTo(p.x - p.vx * 0.03, p.y - p.vy * 0.03); ctx.stroke();
+        ctx.globalAlpha = 0.6 * fade; ctx.strokeStyle = 'rgba(34,32,30,.85)'; ctx.lineWidth = (0.9 + p.s * 0.6) * V.dpr; ctx.lineCap = 'round';
+        ctx.beginPath(); ctx.moveTo(p.x, p.y); ctx.lineTo(p.x - p.vx * 0.045, p.y - p.vy * 0.045); ctx.stroke();
         continue;
       }
       const spr = sprite(CFG[p.type].k);
@@ -259,6 +282,7 @@ export function createStage() {
       ctx.drawImage(spr, -spr.width / 2, -spr.height / 2);
     }
     ctx.globalAlpha = 1; ctx.setTransform(1, 0, 0, 1, 0, 0);
+    if (!back) wx.drawFront(ctx, lastQ);
   }
 
   // ------------------------------------------------------------ transition
@@ -342,7 +366,7 @@ export function createStage() {
   }
 
   return {
-    setView(v) { V = v; scene = null; sceneCam = null; prevCam = null; sceneBlock = -1; prev = null; for (const k in sprites) delete sprites[k]; },
+    setView(v) { V = v; wx.setView(v); scene = null; sceneCam = null; prevCam = null; sceneBlock = -1; prev = null; for (const k in sprites) delete sprites[k]; },
     setSplat(fr) { splat = fr; },
     // returns true when the baked scene changed (renderer re-bakes its ground layer)
     update(wave, dt, quality) {
@@ -361,7 +385,9 @@ export function createStage() {
         }
       }
       if (prev) transT += dt;
+      lastQ = quality;
       stepAmbient(dt, quality);
+      wx.step(dt, quality, curCam());
       return changed;
     },
     get scene() { return scene; },
@@ -374,6 +400,7 @@ export function createStage() {
     },
     get _lastCam() { return bakeCam; },
     get theme() { return theme; },
+    get weather() { return wx.info; },
     get block() { return block; },
     get transitioning() { return !!prev; },
     drawTransition, drawAmbient, drawBanner,
