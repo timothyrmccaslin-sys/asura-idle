@@ -1,4 +1,6 @@
 import { drawFigure, drawAsura as drawAsuraFig, brush } from './figures.js';
+import { loadArt, makeFrame, flashOf as paintedFlash, tinted, unwrapRing } from './art.js';
+import { createAsura } from './asura.js';
 // Ink renderer — draws the state exported by the Rust/wasm core onto a canvas
 // in a sumi-e style. Pure presentation: no game rules live here.
 
@@ -55,6 +57,12 @@ export function createRenderer(canvas) {
   const swipes = [];  // Asura's strike arcs
   const wisps = [];   // ink smoke off the Asura
   let shake = 0, hurtFlash = 0, healFlash = 0, time = 0;
+  // painted art (falls back to the procedural figures until the atlases load)
+  let art = null, artCache = new Map();
+  const anim = createAsura();
+  const stamps = [];   // painted splatter bursts
+  const delayed = [];  // events held back to land on an animation beat
+  loadArt().then((a) => { art = a; artCache = new Map(); }).catch((e) => console.warn(e));
   const R = rng(1234);
 
   const toX = (x) => cx + x * scale;
@@ -70,6 +78,8 @@ export function createRenderer(canvas) {
     cx = W / 2; cy = H / 2 + H * 0.02;
     buildBackground();
     sprites = new Map();
+    artCache = new Map();
+    bgLive = null;
     prewarm();
   }
 
@@ -287,7 +297,172 @@ export function createRenderer(canvas) {
     while (prewarmQ.length && performance.now() - t0 < 4) prewarmQ.shift()();
   }
 
+  // ------------------------------------------------------------ painted art
+  // on-screen heights as a fraction of the arena scale
+  const FOE_H = [0.33, 0.31, 0.27, 0.34, 0.35, 0.36, 0.35, 0.42, 0.74, 0.74, 0.74, 0.7, 0.72];
+  const HIP = [0.6, 0.6, 0.62, 0.6, 0.6, 0, 0, 0.62, 0.64, 0, 0.64, 0, 0];
+  const FLY = new Set([5, 6, 9, 12]);
+  const asuraH = () => 0.45 * scale;
+  function cached(key, make) {
+    let v = artCache.get(key);
+    if (v === undefined) { v = make(); artCache.set(key, v); }
+    return v;
+  }
+  function getPose(name) {
+    return cached('A_' + name, () => {
+      const m = art.meta.asura.frames.A_idle;
+      return makeFrame(art, 'asura', 'A_' + name, asuraH() / m.h);
+    });
+  }
+  function foeFrame(kind) {
+    return cached('E' + kind, () => {
+      const m = art.meta.foes.frames['E' + kind];
+      return makeFrame(art, 'foes', 'E' + kind, (FOE_H[kind] * scale) / m.h);
+    });
+  }
+  function arcTex(red) {
+    return cached('arc' + (red ? 'r' : 'k'), () => {
+      const m = art.meta.fx.frames.FX_arc, k = Math.min(1, (asuraH() * 0.9) / m.h);
+      const fr = makeFrame(art, 'fx', 'FX_arc', k);
+      const c = red ? tinted(fr.c, '#b3202a') : fr.c;
+      return { c, cx: 184.5 * k, cy: 176.2 * k, r: 145.9 * k };
+    });
+  }
+  // straight dry-brush strip unwrapped from the painted enso (see art.js)
+  function strokeTex(red) {
+    return cached('stroke' + (red ? 'r' : 'k'), () => {
+      const m = art.meta.fx.frames.FX_arc;
+      const fr = makeFrame(art, 'fx', 'FX_arc', 1);
+      const strip = unwrapRing(fr.c, 184.5, 176.2, 145.9, 145.9 - 62, 145.9 + 50, 0.3, Math.PI * 2 - 0.3);
+      // pre-scale to ~1.3x the on-screen trail thickness so slices draw near 1:1
+      const th = Math.max(8, Math.round(asuraH() * 0.13 * 1.3)), kk = th / strip.height;
+      const sm = document.createElement('canvas'); sm.width = Math.round(strip.width * kk); sm.height = th;
+      const sg = sm.getContext('2d'); sg.imageSmoothingQuality = 'high'; sg.drawImage(strip, 0, 0, sm.width, sm.height);
+      return red ? tinted(sm, '#b3202a') : sm;
+    });
+  }
+  function dropTex(red) {
+    return cached('drop' + (red ? 'r' : 'k'), () => {
+      const m = art.meta.fx.frames[red ? 'FX_splatred' : 'FX_splat'];
+      return makeFrame(art, 'fx', red ? 'FX_splatred' : 'FX_splat', (16 * dpr) / m.w);
+    });
+  }
+  function stampTex(red) {
+    return cached('splat' + (red ? 'r' : 'k'), () => {
+      const m = art.meta.fx.frames[red ? 'FX_splatred' : 'FX_splat'];
+      return makeFrame(art, 'fx', red ? 'FX_splatred' : 'FX_splat', Math.min(1, (0.3 * scale) / m.w));
+    });
+  }
+  // a painted splatter burst; ground = flattened decal that lingers
+  function stamp(x, y, size, red, life = 0.35, ground = false) {
+    if (!art) return;
+    if (stamps.length > (reduced ? 24 : 64)) { const i = stamps.findIndex((q) => q.ground === ground); stamps.splice(i < 0 ? 0 : i, 1); }
+    stamps.push({ x, y, size, red, life, max: life, rot: R() * Math.PI * 2, ground, flip: R() < 0.5 ? -1 : 1 });
+  }
+  // ground splatter is baked into a live copy of the background: zero per-frame
+  // cost, re-baked every 1.5 s so old stains slowly soak into the paper
+  let bgLive = null, bakeT = 0;
+  function bakeGround(full) {
+    if (!bg) return;
+    if (!bgLive || bgLive.width !== W || bgLive.height !== H) { bgLive = document.createElement('canvas'); bgLive.width = W; bgLive.height = H; full = true; }
+    const g = bgLive.getContext('2d');
+    if (full) { g.setTransform(1, 0, 0, 1, 0, 0); g.globalAlpha = 1; g.drawImage(bg, 0, 0); paintScenery(g, reduced ? 0 : time); }
+    for (const st of stamps) if (st.ground && (full || !st.baked)) { drawStampOn(g, st, Math.min(1, st.life / 3) * (st.red ? 0.42 : 0.36), 1); st.baked = true; }
+  }
+  function drawStamp(s, a, grow) { drawStampOn(ctx, s, a, grow); }
+  // parallax mountains (they drift < 1 px/s, so a 1.5 s re-bake is invisible) + mist
+  function paintScenery(g, drift) {
+    g.globalAlpha = 1;
+    g.drawImage(far, -W * 0.075 + Math.sin(drift * 0.03) * W * 0.04, 0);
+    g.drawImage(near, -W * 0.075 + Math.sin(drift * 0.03 + 1) * W * 0.07, H * 0.0);
+    const mist = g.createLinearGradient(0, H * 0.22, 0, H * 0.4);
+    mist.addColorStop(0, 'rgba(236,230,216,0)'); mist.addColorStop(0.5, 'rgba(236,230,216,.85)'); mist.addColorStop(1, 'rgba(236,230,216,0)');
+    g.fillStyle = mist; g.fillRect(0, H * 0.22, W, H * 0.18);
+  }
+  function drawStampOn(ctx, s, a, grow) {
+    const tex = stampTex(s.red), w = s.size * scale * grow;
+    const k = w / tex.w;
+    ctx.save(); ctx.globalAlpha = a;
+    ctx.translate(toX(s.x), toY(s.y) - (s.ground ? 0 : 0.08 * scale));
+    if (s.ground) ctx.scale(1, SQ * 0.55);
+    ctx.rotate(s.rot); ctx.scale(k * s.flip, k);
+    ctx.drawImage(tex.c, -tex.w / 2, -tex.h / 2);
+    ctx.restore();
+  }
+
+  // painted foe with strip-warp animation: legs shear and stride below the hip,
+  // robes/hair/banners ripple in horizontal strips above it; flyers float
+  function drawFoe(kind, X, Y, face, ph, o) {
+    const fr = foeFrame(kind); if (!fr) return;
+    const img = o.flash ? paintedFlash(fr) : fr.c;
+    const w = fr.w, h = fr.h, ax = fr.ax, ay = fr.ay;
+    const fly = FLY.has(kind);
+    ctx.save();
+    ctx.translate(X, Y); ctx.scale(face, 1);
+    if (o.spawn < 1) ctx.scale(1, 0.75 + 0.25 * o.spawn);
+    if (reduced) { ctx.drawImage(img, -ax, -ay); ctx.restore(); return fr; }
+    const s1 = Math.sin(ph), s2 = Math.sin(ph * 2);
+    let bob = fly ? (Math.sin(ph * 0.7) * 0.03 + 0.02) * h : Math.abs(s1) * h * 0.022;
+    if (kind === 2) bob = Math.max(0, Math.sin(ph)) * h * 0.08; // kappa hops
+    let rock = fly ? 0.06 + Math.sin(ph * 0.7) * 0.03 : s1 * 0.03;
+    if (o.lunge) { ctx.translate(o.lunge * w * 0.12, 0); rock += o.lunge * 0.12; }
+    ctx.rotate(rock);
+    const hip = kind === 11 ? 0 : fly ? 0 : Math.round(h * HIP[kind]);
+    if (hip > 0) {
+      ctx.save();
+      ctx.translate(0, -ay + hip - bob);
+      ctx.transform(1, 0, s1 * 0.16, 1, 0, 0);
+      ctx.scale(1 + s2 * 0.05, 1);
+      ctx.drawImage(img, 0, hip, w, h - hip, -ax, 0, w, h - hip);
+      ctx.restore();
+    }
+    const top = hip || h, N = lite ? 3 : fly || kind === 11 ? 7 : 5, hs = Math.ceil(top / N);
+    const amp = w * (fly ? 0.035 : kind === 11 ? 0.05 : 0.018);
+    for (let i = 0; i < N; i++) {
+      const y0 = i * hs, hh = Math.min(hs + 1, top - y0);
+      if (hh <= 0) break;
+      const q = i / (N - 1);
+      const fall = fly ? q : kind === 11 ? 1 - q : (1 - q) * 0.8 + 0.2;
+      const off = Math.sin(ph * 1.3 - i * 0.75) * amp * fall;
+      ctx.drawImage(img, 0, y0, w, hh, -ax + off, -ay + y0 - bob, w, hh);
+    }
+    ctx.restore();
+    return fr;
+  }
+  // death: the painting tears into strips that drift apart and fade into the paper
+  function drawFoeDeath(k, l) {
+    const fr = foeFrame(k.kind); if (!fr) return;
+    const img = l > 0.82 ? paintedFlash(fr) : fr.c;
+    const w = fr.w, h = fr.h, N = reduced ? 1 : lite ? 3 : 6, hs = Math.ceil(h / N), p = 1 - l;
+    ctx.save();
+    ctx.translate(toX(k.x), toY(k.y)); ctx.scale(k.face, 1);
+    for (let i = 0; i < N; i++) {
+      const y0 = i * hs, hh = Math.min(hs + 1, h - y0);
+      const dir = (i % 2 ? 1 : -1) * (0.6 + ((i * 37) % 10) / 20);
+      ctx.globalAlpha = Math.max(0, l * (0.95 - i * 0.03));
+      ctx.save();
+      ctx.translate(dir * p * w * 0.35 - p * w * 0.15, -p * h * 0.12 * (1 - i / N) + p * p * h * 0.25);
+      ctx.rotate(dir * p * 0.35);
+      ctx.drawImage(img, 0, y0, w, hh, -fr.ax, -fr.ay + y0, w, hh);
+      ctx.restore();
+    }
+    ctx.restore();
+  }
+
+  // build painted caches a few per frame so the first fight never hitches
+  const POSES = ['idle', 'coil', 'backfist', 'roundhouse', 'tornado', 'crescent', 'palm', 'uppercut', 'sweep', 'slam'];
+  function warmArt() {
+    const t0 = performance.now();
+    for (const p of POSES) { if (!artCache.has('A_' + p)) { getPose(p); if (performance.now() - t0 > 6) return; } }
+    if (!artCache.has('arck')) { arcTex(false); arcTex(true); stampTex(false); stampTex(true); strokeTex(false); strokeTex(true); dropTex(false); dropTex(true); }
+    for (let k = 0; k < 13; k++) { if (!artCache.has('E' + k)) { foeFrame(k); if (performance.now() - t0 > 6) return; } }
+  }
+
   function drawAsura(f, t) {
+    if (art) {
+      anim.draw(ctx, lastDt, getPose, strokeTex, f);
+      return;
+    }
     const atk = f[2], face = f[3] || 1;
     const lunge = atk > 0 ? Math.sin((atk / 0.18) * Math.PI) : 0;
     const li = lunge > 0.85 ? 3 : lunge > 0.55 ? 2 : lunge > 0.2 ? 1 : 0;
@@ -300,13 +475,14 @@ export function createRenderer(canvas) {
 
   // ------------------------------------------------------------ effects
   function splat(x, y, n, red, power = 1) {
-    const max = reduced ? 60 : 320;
+    const max = reduced ? 30 : lite ? 30 : art ? 70 : 200;
     for (let i = 0; i < n && parts.length < max; i++) {
       const a = R() * Math.PI * 2, v = (0.15 + R() * 0.5) * power;
       parts.push({ x, y, z: 0, vx: Math.cos(a) * v, vy: Math.sin(a) * v, vz: 0.3 + R() * 0.6 * power, r: (0.6 + R() * 1.9) * dpr, red: red && R() < 0.8, life: 0.7 + R() * 0.5 });
     }
   }
   function decal(x, y, s, red) {
+    if (art) { stamp(x + (R() - 0.5) * 0.02, y, 0.07 + s * 0.05, red, 8, true); return; }
     decals.push({ x, y, s, red, life: 8, seed: (R() * 1e9) | 0 });
     if (decals.length > 70) decals.shift();
   }
@@ -315,30 +491,47 @@ export function createRenderer(canvas) {
     texts.push({ x, y, txt, color, size, life: 0.9, vx: (R() - 0.5) * 0.05 });
   }
 
-  function handle(ev) {
+  let lastF = null;
+  function handle(ev, late = false) {
+    // Wrath Burst: the slam lands a beat after the cast, so its shockwave and
+    // numbers are held for that beat (visual only; the core already applied it)
+    let slamDelay = 0;
+    if (!late && art) for (let i = 0; i < ev.length; i += 6) if (ev[i] === EV.CAST && ev[i + 3] === 0) slamDelay = anim.castSlam();
+    const hold = [];
+    const storm = lastF ? lastF[7] > 0 : false, arms = lastF ? lastF[9] > 0 : false, range = lastF ? lastF[1] : 0.4;
     for (let i = 0; i < ev.length; i += 6) {
       const t = ev[i], x = ev[i + 1], y = ev[i + 2], a = ev[i + 3], b = ev[i + 4], c = ev[i + 5];
+      if (slamDelay > 0 && (t === EV.WRATH || (t === EV.HIT && c === 2))) { for (let k = 0; k < 6; k++) hold.push(ev[i + k]); continue; }
       switch (t) {
         case EV.HIT:
           if (numbersOn) addText(x, y - 0.12, fmt(a) + (b ? '!' : ''), b ? RED : INK, b ? 19 : 14);
-          if (slashes.length < 50) slashes.push({ x, y, ang: R() * Math.PI, life: 0.22, red: !!b, big: c === 2 });
-          splat(x, y, b ? 6 : 2, !!b, b ? 1.2 : 0.7);
-          if (b && !reduced) shake = Math.max(shake, 2);
+          if (art) {
+            if (b && c === 0) {
+              anim.onCrit();
+              stamp(x, y, 0.26, true, 0.45);
+              if (R() < 0.25) stamp(x, y, 0.1, true, 4, true);
+            } else stamp(x, y, c === 2 ? 0.14 : c === 1 ? 0.08 : 0.075, false, 0.26);
+          } else if (slashes.length < 50) slashes.push({ x, y, ang: R() * Math.PI, life: 0.22, red: !!b, big: c === 2 });
+          splat(x, y, b ? 5 : art ? (R() < 0.5 ? 1 : 0) : 2, !!b, b ? 1.2 : 0.7);
+          if (b && !reduced) shake = Math.max(shake, 3);
           break;
         case EV.KILL:
-          if (corpses.length < 24) corpses.push({ kind: b, x, y, life: c ? 0.9 : 0.55, max: c ? 0.9 : 0.55, face: x > 0 ? -1 : 1 });
+          if (corpses.length < 24) corpses.push({ kind: b, x, y, life: c ? 1.0 : 0.62, max: c ? 1.0 : 0.62, face: x > 0 ? -1 : 1, hold: slamDelay });
           splat(x, y, c ? 40 : 12, false, c ? 2 : 1.1);
           splat(x, y, c ? 20 : 4, true, 1);
-          decal(x, y, c ? 2.4 : 1, R() < 0.35 || !!c);
+          if (art) stamp(x, y, c ? 0.5 : 0.18, R() < 0.2 || !!c, 0.4);
+          decal(x, y, c ? 2.4 : 1, art ? R() < 0.12 || !!c : R() < 0.35 || !!c);
           if (numbersOn) addText(x, y - 0.06, '+' + fmt(a), WASH, 12);
           if (c && !reduced) shake = 8;
           break;
         case EV.ATTACK:
-          if (swipes.length < 6) swipes.push({ x, y, life: 0.17, flip: R() < 0.5 });
+          if (art) anim.onAttack(x, y, a, storm, arms, range);
+          else if (swipes.length < 6) swipes.push({ x, y, life: 0.17, flip: R() < 0.5 });
           break;
         case EV.WRATH:
-          rings.push({ r: 0.05, max: a, life: 0.6, red: true });
-          rings.push({ r: 0.02, max: a * 0.8, life: 0.75, red: false });
+          rings.push({ r: 0.05, max: a, life: 0.6, red: true, rot: R() * 6 });
+          rings.push({ r: 0.02, max: a * 0.8, life: 0.75, red: false, rot: R() * 6 });
+          if (art) for (let k = 0; k < (reduced ? 3 : 7); k++) { const q = R() * Math.PI * 2, d = 0.05 + R() * 0.12; stamp(Math.cos(q) * d, Math.sin(q) * d, 0.16, k === 0, 7, true); }
           if (!reduced) shake = 10;
           break;
         case EV.CHAIN:
@@ -353,27 +546,68 @@ export function createRenderer(canvas) {
           break;
       }
     }
+    if (hold.length) delayed.push({ t: slamDelay, ev: hold });
   }
 
   // ------------------------------------------------------------ frame
-  function draw(f, en, dt) {
+  let lastDt = 1 / 60;
+  // adaptive quality: if frames run long for a few seconds (slow phone), shed
+  // secondary effects (smear ghosts, ribbons, cloth strips, droplets); restore
+  // them when there is headroom again
+  let lite = false, ema = 1 / 60, slowT = 0, fastT = 0;
+  function govern(dtReal) {
+    if (dtReal > 0.25) return; // tab switch / hitch, not steady load
+    ema += (dtReal - ema) * 0.05;
+    if (ema > 1 / 42) { slowT += dtReal; fastT = 0; } else if (ema < 1 / 54) { fastT += dtReal; slowT = 0; }
+    if (!lite && slowT > 2.5) { lite = true; slowT = 0; }
+    if (lite && fastT > 8) { lite = false; fastT = 0; }
+  }
+  // radial vignettes rendered once at half resolution (gradient fills are costly per frame)
+  const vigs = {};
+  function vignette(kind) {
+    const key = kind + W + 'x' + H;
+    if (vigs[kind] && vigs[kind].key === key) return vigs[kind].c;
+    const c = document.createElement('canvas'); c.width = Math.ceil(W / 2); c.height = Math.ceil(H / 2);
+    const g = c.getContext('2d'), w = c.width, h = c.height;
+    const gr = g.createRadialGradient(w / 2, h / 2 + h * 0.02, Math.min(w, h) * (kind === 'k' ? 0.3 : 0.35), w / 2, h / 2, Math.max(w, h) * 0.7);
+    gr.addColorStop(0, kind === 'k' ? 'rgba(22,20,18,0)' : 'rgba(179,32,42,0)'); gr.addColorStop(1, kind === 'k' ? 'rgba(22,20,18,1)' : 'rgba(179,32,42,1)');
+    g.fillStyle = gr; g.fillRect(0, 0, w, h);
+    vigs[kind] = { key, c };
+    return c;
+  }
+  function draw(f, en, dtReal) {
+    // the Asura's crit impact frame slows everything around him for a beat
+    let dt = dtReal;
+    govern(dtReal);
+    if (art) dt = dtReal * anim.update(dtReal, f, en, f[1], { reduced, lite, H: asuraH(), X: cx, Y: cy, dpr, SQ, scale });
+    lastDt = dt;
     time += dt;
-    pumpPrewarm();
+    for (let i = delayed.length - 1; i >= 0; i--) {
+      delayed[i].t -= dtReal;
+      if (delayed[i].t <= 0) { const d = delayed.splice(i, 1)[0]; handle(d.ev, true); }
+    }
+    lastF = f;
+    if (art) warmArt(); else pumpPrewarm();
     const t = time;
     ctx.setTransform(1, 0, 0, 1, 0, 0);
     let sx = 0, sy = 0;
     if (shake > 0 && !reduced) { sx = (R() - 0.5) * shake * dpr; sy = (R() - 0.5) * shake * dpr; shake = Math.max(0, shake - dt * 40); }
     ctx.setTransform(1, 0, 0, 1, sx, sy);
-    ctx.drawImage(bg, 0, 0);
-    // parallax mountains drift slowly
-    const drift = reduced ? 0 : t;
-    ctx.globalAlpha = 1;
-    ctx.drawImage(far, -W * 0.075 + Math.sin(drift * 0.03) * W * 0.04, 0);
-    ctx.drawImage(near, -W * 0.075 + Math.sin(drift * 0.03 + 1) * W * 0.07, H * 0.0);
-    // mist band over the mountain feet
-    const mist = ctx.createLinearGradient(0, H * 0.22, 0, H * 0.4);
-    mist.addColorStop(0, 'rgba(236,230,216,0)'); mist.addColorStop(0.5, 'rgba(236,230,216,.85)'); mist.addColorStop(1, 'rgba(236,230,216,0)');
-    ctx.fillStyle = mist; ctx.fillRect(0, H * 0.22, W, H * 0.18);
+    if (art) {
+      let fresh = false;
+      for (let i = stamps.length - 1; i >= 0; i--) {
+        const st = stamps[i];
+        if (!st.ground) continue;
+        st.life -= dt;
+        if (st.life <= 0) stamps.splice(i, 1);
+        else if (!st.baked) fresh = true;
+      }
+      bakeT -= dtReal;
+      if (bakeT <= 0) { bakeGround(true); bakeT = 1.5; } else if (fresh) bakeGround(false);
+      ctx.setTransform(1, 0, 0, 1, sx, sy);
+    }
+    if (art && bgLive) ctx.drawImage(bgLive, 0, 0); // scenery + stains pre-baked
+    else { ctx.drawImage(bg, 0, 0); paintScenery(ctx, reduced ? 0 : t); }
 
     // ground decals
     for (let i = decals.length - 1; i >= 0; i--) {
@@ -405,15 +639,22 @@ export function createRenderer(canvas) {
       ctx.restore();
     }
 
-    // dissolving corpses: melt into the paper as ink
+    // dissolving corpses: the painting tears into strips and fades into the paper
     for (let i = corpses.length - 1; i >= 0; i--) {
-      const k = corpses[i]; k.life -= dt;
+      const k = corpses[i];
+      if (k.hold > 0) { k.hold -= dt; if (art) drawFoe(k.kind, toX(k.x), toY(k.y), k.face, time * 4, { flash: true, spawn: 1 }); continue; }
+      k.life -= dt;
       if (k.life <= 0) { corpses.splice(i, 1); continue; }
-      const l = k.life / k.max, spr = enemySprite(k.kind, 0, enemyPx(k.kind));
-      ctx.save(); ctx.globalAlpha = l * 0.9; ctx.translate(toX(k.x), toY(k.y));
-      ctx.scale(k.face * (1 + (1 - l) * 0.35), 0.35 + 0.65 * l);
-      ctx.drawImage(l > 0.7 ? flashOf(spr) : spr.c, -spr.ox, -spr.oy);
-      ctx.restore();
+      const l = k.life / k.max;
+      if (art) drawFoeDeath(k, l);
+      else {
+        const spr = enemySprite(k.kind, 0, enemyPx(k.kind));
+        ctx.save(); ctx.globalAlpha = l * 0.9; ctx.translate(toX(k.x), toY(k.y));
+        ctx.scale(k.face * (1 + (1 - l) * 0.35), 0.35 + 0.65 * l);
+        ctx.drawImage(l > 0.7 ? flashOf(spr) : spr.c, -spr.ox, -spr.oy);
+        ctx.restore();
+      }
+      ctx.globalAlpha = 1;
       if (!reduced && R() < dt * 30 && wisps.length < 60) wisps.push({ x: k.x + (R() - 0.5) * 0.06, y: k.y, h: 0.05, life: 0.9, r: (2 + R() * 3) * dpr });
     }
 
@@ -422,6 +663,14 @@ export function createRenderer(canvas) {
       const r = rings[i]; r.life -= dt;
       if (r.life <= 0) { rings.splice(i, 1); continue; }
       r.r += (r.max - r.r) * Math.min(1, dt * 9);
+      if (art) {
+        const tex = arcTex(r.red), k = (r.r * scale) / tex.r;
+        ctx.save(); ctx.translate(cx, cy); ctx.scale(k, k * SQ); ctx.rotate(r.rot + (1 - r.life) * (r.red ? 2.2 : -1.6));
+        ctx.globalAlpha = Math.min(1, r.life * (r.red ? 1.6 : 1.2));
+        ctx.drawImage(tex.c, -tex.cx, -tex.cy);
+        ctx.restore(); ctx.globalAlpha = 1;
+        continue;
+      }
       ctx.save(); ctx.translate(cx, cy);
       ctx.strokeStyle = r.red ? `rgba(179,32,42,${r.life})` : `rgba(22,20,18,${r.life * 0.8})`;
       ctx.lineWidth = (r.red ? 7 : 3) * dpr * (0.4 + r.life);
@@ -440,28 +689,37 @@ export function createRenderer(canvas) {
       const kind = en[o + 1], x = en[o + 2], y = en[o + 3], hp = en[o + 4], size = en[o + 5], age = en[o + 6], flash = en[o + 7], phase = en[o + 8], boss = en[o + 9], slow = en[o + 10];
       const X = toX(x), Y = toY(y), px = enemyPx(kind);
       const fade = Math.min(1, age / 0.6);
-      ctx.save();
-      ctx.globalAlpha = fade;
-      // soft wash shadow
-      ctx.fillStyle = 'rgba(22,20,18,.2)';
-      const fly = kind === 5 || kind === 6 || kind === 9 || kind === 12;
-      ctx.beginPath(); ctx.ellipse(X, Y, px * (fly ? 0.2 : 0.3), px * 0.075, 0, 0, Math.PI * 2); ctx.fill();
       const face = x > 0 ? -1 : 1;
       const d = Math.hypot(x, y);
       const cad = CADENCE[kind] || 6;
       const melee = d < 0.2;
-      const ph = reduced ? phase : (melee ? t * 3 : t * cad * (slow > 0 ? 0.4 : 1)) + phase;
-      const fr = Math.floor(((((ph / TAU) % 1) + 1) % 1) * FRAMES) % FRAMES;
-      const spr = enemySprite(kind, fr, px);
-      ctx.translate(X + (melee && !reduced ? Math.sin(t * 9 + phase) * px * 0.04 * -Math.sign(x) : 0), Y);
-      ctx.scale(face, 1);
-      if (kind === 6 || kind === 12) ctx.globalAlpha = fade * 0.88;
-      ctx.drawImage(flash > 0 ? flashOf(spr) : spr.c, -spr.ox, -spr.oy);
+      const fly = kind === 5 || kind === 6 || kind === 9 || kind === 12;
+      let topY = Y - px * (boss ? 1.25 : 1.05);
+      ctx.save();
+      ctx.globalAlpha = fade;
+      // soft wash shadow
+      ctx.fillStyle = 'rgba(22,20,18,.2)';
+      ctx.beginPath(); ctx.ellipse(X, Y, px * (fly ? 0.2 : 0.3), px * 0.075, 0, 0, Math.PI * 2); ctx.fill();
+      if (art) {
+        const ph = reduced ? phase : (melee ? t * 3 : t * cad * (slow > 0 ? 0.4 : 1)) + phase;
+        const lunge = melee && !reduced ? Math.max(0, Math.sin(t * 9 + phase)) : 0;
+        if (kind === 6 || kind === 12) ctx.globalAlpha = fade * 0.9;
+        const fr = drawFoe(kind, X, Y, face, ph, { flash: flash > 0, spawn: fade, lunge });
+        if (fr) topY = Y - fr.ay - 2 * dpr;
+      } else {
+        const ph = reduced ? phase : (melee ? t * 3 : t * cad * (slow > 0 ? 0.4 : 1)) + phase;
+        const fr = Math.floor(((((ph / TAU) % 1) + 1) % 1) * FRAMES) % FRAMES;
+        const spr = enemySprite(kind, fr, px);
+        ctx.translate(X + (melee && !reduced ? Math.sin(t * 9 + phase) * px * 0.04 * -Math.sign(x) : 0), Y);
+        ctx.scale(face, 1);
+        if (kind === 6 || kind === 12) ctx.globalAlpha = fade * 0.88;
+        ctx.drawImage(flash > 0 ? flashOf(spr) : spr.c, -spr.ox, -spr.oy);
+      }
       ctx.restore();
       // hp bar
       if (hp < 0.999 || boss) {
         const bw = Math.max(22 * dpr, px * (boss ? 0.9 : 0.6)), bh = (boss ? 5 : 3.2) * dpr;
-        const by = Y - px * (boss ? 1.25 : 1.05) - 4 * dpr;
+        const by = topY - 4 * dpr;
         ctx.globalAlpha = fade;
         ctx.fillStyle = 'rgba(236,230,216,.85)'; ctx.fillRect(X - bw / 2, by, bw, bh);
         ctx.fillStyle = boss ? RED : INK; ctx.fillRect(X - bw / 2, by, bw * hp, bh);
@@ -482,6 +740,15 @@ export function createRenderer(canvas) {
       if (w.life <= 0) { wisps.splice(i, 1); continue; }
       ctx.fillStyle = w.red ? `rgba(179,32,42,${w.life * 0.18})` : `rgba(22,20,18,${w.life * 0.08})`;
       ctx.beginPath(); ctx.arc(toX(w.x), toY(w.y) - w.h * scale, w.r * (1.8 - w.life), 0, Math.PI * 2); ctx.fill();
+    }
+    // painted splatter bursts in the air at the point of impact
+    if (art) for (let i = stamps.length - 1; i >= 0; i--) {
+      const st = stamps[i];
+      if (st.ground) continue;
+      st.life -= dt;
+      if (st.life <= 0) { stamps.splice(i, 1); continue; }
+      const q = 1 - st.life / st.max;
+      drawStamp(st, Math.min(1, st.life / st.max * 2.2) * 0.95, 0.55 + 0.6 * Math.sqrt(q));
     }
     // the Asura's strike arcs — a tapered crescent of ink toward the target
     for (let i = swipes.length - 1; i >= 0; i--) {
@@ -526,9 +793,21 @@ export function createRenderer(canvas) {
       const p = parts[i]; p.life -= dt;
       p.x += p.vx * dt * 0.5; p.y += p.vy * dt * 0.5; p.vz -= dt * 2.2; p.z = Math.max(0, p.z + p.vz * dt * 0.3);
       if (p.life <= 0) { parts.splice(i, 1); continue; }
+      if (art) {
+        // painted droplet: a tiny rotated splatter stamp
+        // stretched along its flight so it reads as a flung drop, not a star
+        const tex = dropTex(p.red), k = (p.r * 4.6) / tex.w;
+        const rot = Math.atan2(p.vy * SQ - p.vz * 0.4, p.vx), co = Math.cos(rot), si = Math.sin(rot);
+        const ax = k * 1.7, ay = k * 0.75;
+        ctx.globalAlpha = Math.min(1, p.life * 2);
+        ctx.setTransform(co * ax, si * ax, -si * ay, co * ay, toX(p.x) + sx, toY(p.y) - p.z * scale * 0.4 - 0.06 * scale + sy);
+        ctx.drawImage(tex.c, -tex.w / 2, -tex.h / 2);
+        continue;
+      }
       ctx.fillStyle = p.red ? `rgba(179,32,42,${Math.min(1, p.life * 2)})` : `rgba(22,20,18,${Math.min(1, p.life * 2)})`;
       ctx.beginPath(); ctx.ellipse(toX(p.x), toY(p.y) - p.z * scale * 0.4 - 0.06 * scale, p.r * 1.8, p.r * 0.8, Math.atan2(p.vy * SQ - p.vz * 0.4, p.vx), 0, Math.PI * 2); ctx.fill();
     }
+    ctx.setTransform(1, 0, 0, 1, sx, sy); ctx.globalAlpha = 1;
     // floating numbers
     ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
     for (let i = texts.length - 1; i >= 0; i--) {
@@ -546,14 +825,12 @@ export function createRenderer(canvas) {
     ctx.setTransform(1, 0, 0, 1, 0, 0);
     // vignettes
     if (f[7] > 0) {
-      const g2 = ctx.createRadialGradient(cx, cy, Math.min(W, H) * 0.3, cx, cy, Math.max(W, H) * 0.7);
-      g2.addColorStop(0, 'rgba(22,20,18,0)'); g2.addColorStop(1, `rgba(22,20,18,${0.35 + (reduced ? 0 : Math.random() * 0.1)})`);
-      ctx.fillStyle = g2; ctx.fillRect(0, 0, W, H);
+      ctx.globalAlpha = 0.35 + (reduced ? 0 : Math.random() * 0.1);
+      ctx.drawImage(vignette('k'), 0, 0, W, H); ctx.globalAlpha = 1;
     }
     if (hurtFlash > 0) {
-      const g3 = ctx.createRadialGradient(cx, cy, Math.min(W, H) * 0.35, cx, cy, Math.max(W, H) * 0.7);
-      g3.addColorStop(0, 'rgba(179,32,42,0)'); g3.addColorStop(1, `rgba(179,32,42,${hurtFlash * 0.4})`);
-      ctx.fillStyle = g3; ctx.fillRect(0, 0, W, H);
+      ctx.globalAlpha = hurtFlash * 0.4;
+      ctx.drawImage(vignette('r'), 0, 0, W, H); ctx.globalAlpha = 1;
       hurtFlash = Math.max(0, hurtFlash - dt * 2);
     }
     if (healFlash > 0) {
@@ -566,5 +843,8 @@ export function createRenderer(canvas) {
     resize, draw, handle,
     setReduced(v) { reduced = v || matchMedia('(prefers-reduced-motion: reduce)').matches; },
     setNumbers(v) { numbersOn = v; },
+    get quality() { return reduced ? 'reduced' : lite ? 'lite' : 'full'; },
+    get anim() { return anim; },
+    get painted() { return !!art; },
   };
 }

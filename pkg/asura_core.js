@@ -158,7 +158,9 @@ export class Game {
     }
     /**
      * Per-frame scalars: [hpFrac, range, atkAnim, face, wave, waveKilled, waveTotal,
-     *   stormLeft, beadsLeft, armsLeft, waveIntro, souls, isBossWave, hp, maxHp]
+     *   stormLeft, beadsLeft, armsLeft, waveIntro, souls, isBossWave, hp, maxHp,
+     *   atkPhase (0..1 toward the next swing), attacksPerSecond] — the last two are
+     *   read-only hints so the renderer can start a move's wind-up before the hit lands.
      * @returns {Float64Array}
      */
     frame() {

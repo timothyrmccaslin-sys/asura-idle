@@ -6,7 +6,7 @@ import { createRenderer, fmt } from './render.js';
 const SAVE_KEY = 'asura-idle-save-v1';
 const PREFS_KEY = 'asura-idle-prefs-v1';
 const AUTOSAVE_MS = 5000;
-const APP_VERSION = '2.0.0'; // keep in step with VERSION in sw.js
+const APP_VERSION = '3.0.0'; // keep in step with VERSION in sw.js
 
 const UPS = {
   damage:   { name: 'Wrath',        desc: 'Raw striking power. Doubles every 25 levels.', f: (v) => fmt(v) },
@@ -425,7 +425,7 @@ async function main() {
   window.addEventListener('beforeunload', save);
 
   // test/debug handle (no effect on play)
-  window.__asura = { game, save, refresh, SAVE_KEY };
+  window.__asura = { game, save, refresh, SAVE_KEY, get renderer() { return renderer; } };
   requestAnimationFrame((t) => { last = t; frame.prev = t; frame(t); });
 }
 

@@ -1,0 +1,127 @@
+# Keys the hand-painted sumi-e source images (ink on white paper) to transparency,
+# un-blending edge colours so there are no halos, crops them, records anchors
+# (feet, sash, beads, head) and packs the webp atlases + atlas.json in assets/art/.
+# Usage: python3 tools/build_atlas.py <dir with a_*.jpg, e<k>_*.jpg, fx_*.jpg>
+import numpy as np, json, glob, os
+from PIL import Image
+from scipy import ndimage as ndi
+
+import sys
+SRC=sys.argv[1] if len(sys.argv) > 1 else 'art-src'
+OUT=os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'assets', 'art')
+os.makedirs(OUT, exist_ok=True)
+
+def disk(r):
+    y,x=np.ogrid[-r:r+1,-r:r+1]; return x*x+y*y<=r*r
+
+def key(path):
+    im=np.asarray(Image.open(path).convert('RGB')).astype(np.float32)
+    mn=im.min(axis=2); d=255-mn
+    ink=d>24
+    lab,n=ndi.label(ink); sizes=ndi.sum(ink,lab,range(1,n+1))
+    keep=np.zeros(n+1,bool); keep[1:]=sizes>=8; ink=keep[lab]
+    closed=ndi.binary_closing(ink,structure=disk(4))
+    fg=ndi.binary_fill_holes(closed)&(closed|ndi.binary_fill_holes(closed))
+    inner=ndi.binary_erosion(fg,iterations=2)
+    a0=np.clip(d/255.0,0,1)
+    a_edge=np.clip(a0*1.6,0,1)
+    alpha=np.where(inner,1.0,np.where(fg,a_edge,0.0))
+    # un-blend edge colours from the white paper so there is no halo
+    safe=np.maximum(a0,0.04)[...,None]
+    unbl=np.clip((im-255*(1-a0[...,None]))/safe,0,255)
+    col=np.where((inner)[...,None],im,unbl)
+    col=col*np.array([241,235,222],np.float32)/255.0
+    rgba=np.dstack([col,alpha*255]).astype(np.uint8)
+    return Image.fromarray(rgba,'RGBA')
+
+def crop(img,pad=4):
+    a=np.asarray(img)[...,3]
+    ys,xs=np.where(a>10)
+    x0,x1,y0,y1=max(0,xs.min()-pad),min(a.shape[1],xs.max()+pad+1),max(0,ys.min()-pad),min(a.shape[0],ys.max()+pad+1)
+    return img.crop((x0,y0,x1,y1)),(x0,y0)
+
+def red_mask(img):
+    a=np.asarray(img).astype(np.int32); r,g,b,al=a[...,0],a[...,1],a[...,2],a[...,3]
+    return (al>128)&(r>95)&(r>g*1.6)&(r>b*1.5)
+
+def baseline(img):
+    a=np.asarray(img)[...,3]>128
+    rows=np.where(a.sum(axis=1)>3)[0]
+    return int(rows.max())
+
+frames={}
+def add(name,img,ax,ay,extra=None):
+    frames[name]={'img':img,'ax':ax,'ay':ay,**(extra or {})}
+
+# ---------------- Asura poses: uniform scale, anchor at sash x / feet baseline
+S_A=0.40
+for p in sorted(glob.glob(SRC+'/a_*.jpg')):
+    name=os.path.basename(p)[2:-4]
+    k=key(p); k=k.resize((round(k.width*S_A),round(k.height*S_A)),Image.LANCZOS)
+    c,_=crop(k)
+    rm=red_mask(c); ys,xs=np.where(rm)
+    # split red into sash (lower, larger) and beads (upper) by y gap
+    order=np.sort(ys); gaps=np.diff(order); cut=order[np.argmax(gaps)] if len(gaps) else order.mean()
+    lo=ys>cut; hi=~lo
+    if lo.sum()<hi.sum()*0.3: lo=ys>np.median(ys); hi=~lo
+    sash=(float(xs[lo].mean()),float(ys[lo].mean())); beads=(float(xs[hi].mean()),float(ys[hi].mean()))
+    by=baseline(c)
+    add('A_'+name,c,sash[0],by,{'sash':sash,'beads':beads,'head':(beads[0]+4,beads[1]-(sash[1]-beads[1])*0.35)})
+
+# ---------------- enemies & bosses: normalised height
+H={0:236,1:220,2:196,3:236,4:240,5:240,6:236,7:250,8:400,9:400,10:400,11:400,12:400}
+for p in glob.glob(SRC+'/e*_*.jpg'):
+    base=os.path.basename(p); kind=int(base[1:base.index('_')])
+    k=key(p); c,_=crop(k)
+    s=H[kind]/c.height; c=c.resize((max(1,round(c.width*s)),H[kind]),Image.LANCZOS)
+    a=np.asarray(c)[...,3].astype(np.float32)
+    ax=float((a.sum(axis=0)*np.arange(a.shape[1])).sum()/a.sum())
+    # anchor x on the feet: weighted centre of the lowest 18% of rows
+    lowr=a[int(a.shape[0]*0.82):]
+    if lowr.sum()>0: ax=float((lowr.sum(axis=0)*np.arange(a.shape[1])).sum()/lowr.sum())
+    add('E%d'%kind,c,ax,baseline(c))
+
+# ---------------- FX stamps (alpha only; recoloured at runtime)
+for nm,size in [('arc',360),('splat',256),('splatred',256)]:
+    k=key(SRC+'/fx_%s.jpg'%nm); c,_=crop(k,2)
+    s=size/max(c.size); c=c.resize((round(c.width*s),round(c.height*s)),Image.LANCZOS)
+    arr=np.asarray(c).copy()
+    if nm=='splatred':
+        arr[...,0]=179; arr[...,1]=32; arr[...,2]=42   # seal red
+        a=arr[...,3].astype(np.float32); arr[...,3]=np.clip(a*1.0,0,255).astype(np.uint8)
+    else:
+        arr[...,0]=20; arr[...,1]=18; arr[...,2]=16
+    c=Image.fromarray(arr,'RGBA')
+    add('FX_'+nm,c,c.width/2,c.height/2)
+
+# ---------------- shelf pack into atlases
+def pack(names,file,maxw=2048):
+    items=sorted(names,key=lambda n:-frames[n]['img'].height)
+    x=y=sh=0; pos={}
+    for n in items:
+        im=frames[n]['img']
+        if x+im.width>maxw: x=0; y+=sh+2; sh=0
+        pos[n]=(x,y); x+=im.width+2; sh=max(sh,im.height)
+    W=maxw; Hh=y+sh
+    atlas=Image.new('RGBA',(W,Hh),(0,0,0,0))
+    meta={}
+    for n,(px,py) in pos.items():
+        f=frames[n]; atlas.paste(f['img'],(px,py))
+        m={'x':px,'y':py,'w':f['img'].width,'h':f['img'].height,'ax':round(f['ax'],1),'ay':round(f['ay'],1)}
+        for k2 in ('sash','beads','head'):
+            if k2 in f: m[k2]=[round(v,1) for v in f[k2]]
+        meta[n]=m
+    atlas.save(OUT+'/'+file,'WEBP',quality=86,method=6,alpha_quality=90)
+    return meta,(W,Hh)
+
+ma,sa=pack([n for n in frames if n.startswith('A_')],'asura.webp')
+me,se=pack([n for n in frames if n.startswith('E')],'foes.webp')
+mf,sf=pack([n for n in frames if n.startswith('FX_')],'fx.webp',1024)
+meta={'asura':{'file':'asura.webp','size':sa,'frames':ma},'foes':{'file':'foes.webp','size':se,'frames':me},'fx':{'file':'fx.webp','size':sf,'frames':mf}}
+json.dump(meta,open(OUT+'/atlas.json','w'),indent=1)
+for f in ('asura.webp','foes.webp','fx.webp'): print(f,os.path.getsize(OUT+'/'+f)//1024,'KB', Image.open(OUT+'/'+f).size)
+# previews on dark + paper backgrounds to check for halos
+for f in ('asura.webp','foes.webp'):
+    a=Image.open(OUT+'/'+f)
+    for bg,nm in [((40,40,60,255),'dark'),((236,230,216,255),'paper')]:
+        b=Image.new('RGBA',a.size,bg); b.alpha_composite(a); b.convert('RGB').save(os.path.join(SRC,'preview-%s-%s.jpg'%(f[:-5],nm)),quality=85)

@@ -1054,7 +1054,9 @@ impl Game {
     }
 
     /// Per-frame scalars: [hpFrac, range, atkAnim, face, wave, waveKilled, waveTotal,
-    ///   stormLeft, beadsLeft, armsLeft, waveIntro, souls, isBossWave, hp, maxHp]
+    ///   stormLeft, beadsLeft, armsLeft, waveIntro, souls, isBossWave, hp, maxHp,
+    ///   atkPhase (0..1 toward the next swing), attacksPerSecond] — the last two are
+    ///   read-only hints so the renderer can start a move's wind-up before the hit lands.
     pub fn frame(&self) -> Vec<f64> {
         vec![
             (self.hp / self.max_hp()).clamp(0.0, 1.0),
@@ -1072,6 +1074,8 @@ impl Game {
             if self.is_boss_wave() { 1.0 } else { 0.0 },
             self.hp.max(0.0),
             self.max_hp(),
+            self.atk_timer.clamp(0.0, 1.0),
+            self.attack_speed(),
         ]
     }
 
