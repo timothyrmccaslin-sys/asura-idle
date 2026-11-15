@@ -20,6 +20,9 @@ from keying import key_array, drop_paper
 
 # props whose enclosed white areas are painted (banner cloth, plaster wall), not paper
 PAINTED_WHITE = {('shogun', 1), ('shogun', 5)}
+# props left out of the scatter pools entirely (the small torii gates read wrong next
+# to the big painted torii in the plates; v3.2.3)
+DROP = {('oni', 0), ('onryo', 5)}
 
 def key(im, painted_white=False):
     # same keying as the characters: enclosed paper gaps (between willow strands,
@@ -57,6 +60,7 @@ for t in THEMES:
     frames = []
     for gy in range(2):
         for gx in range(3):
+            if (t, gy * 3 + gx) in DROP: continue
             cell = sheet[gy * sh // 2:(gy + 1) * sh // 2, gx * sw // 3:(gx + 1) * sw // 3]
             rgba = key(cell, (t, gy * 3 + gx) in PAINTED_WHITE)
             al = rgba[..., 3]

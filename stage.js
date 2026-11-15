@@ -48,6 +48,7 @@ export function createStage() {
   const sprites = {};
   const wx = createWeather();
   let lastQ = 'full';
+  let propInfo = null; // last bake's prop scatter (for tests)
   // props that carry a flame: frame index -> light height (fraction of prop height)
   const LANTERNS = { onryo: { 0: 0.6 }, shogun: { 0: 0.66 } };
 
@@ -132,6 +133,7 @@ export function createStage() {
       placed.push({ X, Y, dep, k, flip, sz });
     }
     placed.sort((a, b) => a.Y - b.Y);
+    propInfo = { theme: T.key, want: n, placed: placed.map((p) => p.k), pool: fr.length };
     const lights = [];
     for (const p of placed) {
       const f = fr[p.k], depth = p.dep;
@@ -401,6 +403,7 @@ export function createStage() {
     get _lastCam() { return bakeCam; },
     get theme() { return theme; },
     get weather() { return wx.info; },
+    get props() { return propInfo; },
     get block() { return block; },
     get transitioning() { return !!prev; },
     drawTransition, drawAmbient, drawBanner,
