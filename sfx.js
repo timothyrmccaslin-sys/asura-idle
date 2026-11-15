@@ -55,11 +55,14 @@ export const VOICES = {
   whoosh(ctx, out, t) { const d = R(0.16, 0.24); nz(ctx, out, t, d, 'bandpass', R(500, 700), 1.4, d * 0.45, 0.35, R(2200, 3200)); return d; },
   hit(ctx, out, t, o = {}) { // flesh-and-cloth impact; o.v picks punch / kick / palm
     const v = o.v ?? (Math.random() * 3) | 0, p = R(0.88, 1.14);
-    // fist and palm strikes use the owner-supplied punch recording when it is loaded
-    if (v !== 1 && o.buf) {
-      const src = ctx.createBufferSource(); src.buffer = o.buf.buf; src.playbackRate.value = R(0.94, 1.06);
-      const g = ctx.createGain(); g.gain.value = R(0.85, 1.0) * 1.4; src.connect(g); g.connect(out);
-      src.start(t, o.buf.offset); return 0.6;
+    // fist, palm and kick strikes all use the owner-supplied punch recording when it is loaded;
+    // kicks play it ~10% lower (0.90x +/-3%) and 20% louder so they land heavier
+    if (o.buf) {
+      const kick = v === 1;
+      const src = ctx.createBufferSource(); src.buffer = o.buf.buf;
+      src.playbackRate.value = kick ? 0.9 * R(0.97, 1.03) : R(0.94, 1.06);
+      const g = ctx.createGain(); g.gain.value = R(0.85, 1.0) * 1.4 * (kick ? 1.2 : 1); src.connect(g); g.connect(out);
+      src.start(t, o.buf.offset); return kick ? 0.7 : 0.6;
     }
     thud(ctx, out, t, [150, 115, 180][v] * p, 52 * p, [0.09, 0.13, 0.07][v], 0.9);
     nz(ctx, out, t, [0.05, 0.07, 0.035][v], 'bandpass', [1400, 900, 2600][v] * p, 1.2, 0.001, [0.55, 0.5, 0.7][v]);
@@ -232,7 +235,7 @@ export function createSfx({ enabled = true, volume = 0.6 } = {}) {
     last[name] = now;
     const g = ctx.createGain(); g.gain.value = (LEVEL[name] ?? 1) * gain; g.connect(comp);
     o = o || {};
-    if (name === 'hit' && punch && o.v !== 1) o = { ...o, buf: punch };
+    if (name === 'hit' && punch) o = { ...o, buf: punch }; // crit calls VOICES.hit directly, so it stays synthesised
     const d = v(ctx, g, now + 0.005, o);
     setTimeout(() => g.disconnect(), (d + 0.5) * 1000);
     if (cls) live[cls].push(now + Math.min(d, 0.25));

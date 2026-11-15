@@ -32,8 +32,9 @@ cp /tmp/music/loops.json assets/music/
 
 **Punch sample:** `assets/audio/punch.mp3` is a recording supplied by the
 project owner for use in Asura. It was trimmed, loudness-matched and converted
-to mono. It plays for fist and palm hits, with small random pitch and level
-variation. If it can't be loaded, the game falls back to the synthesised punch.
+to mono. It plays for fist, palm and kick hits, with small random pitch and
+level variation; kicks play it about 10% lower and a little louder. If it can't
+be loaded, the game falls back to the synthesised hits.
 
 Every other sound effect is original. They are synthesised live in the browser by
 `sfx.js`, using Web Audio oscillators, filtered noise, envelopes and a
@@ -41,8 +42,8 @@ compressor. There are no sample files and no third-party audio, so they are
 project-owned under the same terms as this repo. The same code renders the
 preview offline with `OfflineAudioContext`.
 
-The effects are: strike whoosh, three hit variations (punch, kick and palm,
-each with random pitch), crit, enemy death, boss hit, boss death (taiko and
+The effects are: strike whoosh, synthesised fallback hits (punch, kick and
+palm, each with random pitch), crit, enemy death, boss hit, boss death (taiko and
 gong), Wrath Burst, Storm, chain zap, Blood Beads, Six Arms, Tidal Surge,
 Healing Rain, rain droplet, Whirlpool, Blue Lotus Beads, heal tick, upgrade
 purchase, boss appears (taiko), wave clear (koto), defeat and character unlock.
