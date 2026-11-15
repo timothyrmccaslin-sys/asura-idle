@@ -9,7 +9,7 @@ BG = [(28, 26, 30), (150, 26, 34), (128, 128, 128)]
 try: font = ImageFont.truetype('DejaVuSans-Bold.ttf', 16)
 except Exception: font = ImageFont.load_default()
 cells = []
-for sheet in ('asura', 'foes'):
+for sheet in [s for s in ('asura', 'daeva', 'sorcerer', 'foes') if s in meta]:
     atlas = Image.open(os.path.join(d, meta[sheet]['file'])).convert('RGBA')
     for name, f in sorted(meta[sheet]['frames'].items(), key=lambda kv: (len(kv[0]), kv[0])):
         spr = atlas.crop((f['x'], f['y'], f['x'] + f['w'], f['y'] + f['h']))

@@ -312,3 +312,22 @@ body.daeva .coin.bead .val, body.daeva #reb-gain { color: #b3202a; }
 .range input { width: 100%; accent-color: var(--ink); min-height: 28px; }
 .range input:disabled { opacity: .4; }
 .range-val { font-size: 13px; color: var(--ink-3); text-align: right; }
+
+/* the Sorcerer's accent: deep violet; his mana bar sits above the health bar */
+body.sorcerer { --red: #7a3fd0; --red-2: #9a6ae8; }
+body.sorcerer .btn.danger { color: #b3202a; border-color: #b3202a; }
+body.sorcerer .btn.danger.primary { background: #b3202a; color: var(--paper); }
+body.sorcerer .bead-dot { background: radial-gradient(circle at 35% 35%, #e46a6a, #b3202a 55%, #5a0c10); }
+body.sorcerer #hp-fill { background: linear-gradient(90deg, #8d1820, #c8343c); }
+body.sorcerer .coin.bead .val, body.sorcerer #reb-gain { color: #b3202a; }
+.mana { position: relative; height: 11px; margin-bottom: 4px; border: 1.5px solid var(--ink); background: rgba(236,230,216,.8); border-radius: 5px 2px 6px 3px; overflow: hidden; }
+.mana[hidden] { display: none; }
+#mana-fill { position: absolute; inset: 0 auto 0 0; width: 50%; background: linear-gradient(90deg, #3d1a7a, #7a3fd0 60%, #b48cf2); transition: width .12s; }
+#mana-text { position: absolute; inset: 0; text-align: center; font-size: 10px; line-height: 9px; color: var(--ink); text-shadow: 0 0 3px var(--paper), 0 0 3px var(--paper); }
+.ab .ab-cost { position: absolute; top: 2px; right: 4px; z-index: 1; font-size: 11px; line-height: 1; color: #7a3fd0; }
+.ab .ab-cost::after { content: ' ◆'; font-size: 8px; }
+.ab.poor { opacity: .45; filter: grayscale(1); }
+.ab.poor .ab-cost { color: var(--ink-3); }
+.card.only { border-color: #7a3fd0; }
+.card.only .c-name { color: #7a3fd0; }
+.card[hidden] { display: none; }

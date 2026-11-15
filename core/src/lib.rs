@@ -47,8 +47,8 @@ fn clear_cone(x: f64, y: f64) -> (f64, f64) {
     (d * a.cos(), d * a.sin())
 }
 const ASURA_RADIUS: f64 = 0.075;
-pub const N_UP: usize = 10;
-pub const N_SHOP: usize = 7;
+pub const N_UP: usize = 12;
+pub const N_SHOP: usize = 10;
 pub const N_AB: usize = 4;
 const ENEMY_STRIDE: usize = 11;
 const EVENT_STRIDE: usize = 6;
@@ -71,6 +71,12 @@ pub const EV_DROP: f64 = 13.0; // Healing Rain droplet strike at (x, y)
 pub const EV_UNLOCK: f64 = 14.0; // a = character id newly unlocked
 pub const EV_SWITCH: f64 = 15.0; // a = character id now active
 pub const EV_POOL: f64 = 16.0; // Whirlpool opened at (x, y), a = radius
+pub const EV_FREEZE: f64 = 17.0; // a foe at (x, y) frozen for a seconds; b = 1 for a boss
+pub const EV_FLAME: f64 = 18.0; // Flame Wave rolls out to radius a
+pub const EV_BOLT: f64 = 19.0; // Arcane Bolt number a flies to the foe at (x, y)
+pub const EV_HELL: f64 = 20.0; // Frozen Hell: a = radius of the frost, b = duration
+pub const EV_SHATTER: f64 = 21.0; // a frozen foe's ice shattered at (x, y)
+pub const EV_ARC: f64 = 22.0; // Chain Lightning hop a: from (b, c) to the foe at (x, y)
 
 struct UpDef {
     key: &'static str,
@@ -90,7 +96,12 @@ const UPS: [UpDef; N_UP] = [
     UpDef { key: "regen", base: 40.0, growth: 1.18, max: 0 },
     UpDef { key: "greed", base: 60.0, growth: 1.21, max: 0 },
     UpDef { key: "siphon", base: 300.0, growth: 1.6, max: 20 },
+    // Sorcerer only (shown in the list while he is active; levels persist)
+    UpDef { key: "manapool", base: 500.0, growth: 1.24, max: 50 },
+    UpDef { key: "manaregen", base: 750.0, growth: 1.26, max: 50 },
 ];
+pub const UP_MANAPOOL: usize = 10;
+pub const UP_MANAREGEN: usize = 11;
 
 struct ShopDef {
     key: &'static str,
@@ -107,13 +118,20 @@ const SHOP: [ShopDef; N_SHOP] = [
     ShopDef { key: "karmicLeap", base: 4.0, growth: 1.8, max: 15 },
     ShopDef { key: "meditation", base: 2.0, growth: 1.7, max: 8 },
     ShopDef { key: "tempestHeart", base: 4.0, growth: 1.9, max: 8 },
+    ShopDef { key: "deepWell", base: 3.0, growth: 1.6, max: 20 },     // +15% max mana
+    ShopDef { key: "risingTide", base: 3.0, growth: 1.6, max: 20 },   // +15% mana per strike
+    ShopDef { key: "abilityPower", base: 4.0, growth: 1.7, max: 0 },  // +10% ability strength, all characters
 ];
+pub const SHOP_MANAPOOL: usize = 7;
+pub const SHOP_MANAREGEN: usize = 8;
+pub const SHOP_ABILITY: usize = 9;
 
 struct AbDef {
     key: &'static str,
     unlock: u32,
     cd: f64,
     dur: f64,
+    cost: f64, // mana cost (Sorcerer); 0 = cooldown ability
 }
 
 // ---------------------------------------------------------------- characters
@@ -125,29 +143,63 @@ struct CharDef {
     unlock: u32,
     dmg: f64,   // basic-attack damage multiplier
     regen: f64, // regen multiplier
+    aspd: f64,  // attack-speed multiplier
     abs: [AbDef; N_AB],
 }
-pub const N_CHARS: usize = 2;
+pub const N_CHARS: usize = 3;
 pub const CH_ASURA: u32 = 0;
 pub const CH_DAEVA: u32 = 1;
+pub const CH_SORC: u32 = 2;
+/// Sorcerer: a short global lockout after any cast stops accidental double taps
+const SORC_GCD: f64 = 0.4;
+/// his hand bursts splash this share of the hit onto foes packed around the target
+const BURST_SPLASH: f64 = 0.30;
+const BURST_R: f64 = 0.12;
+/// Arcane Bolts: three bolts at the furthest foes, this many strikes' worth each
+const BOLT_MULT: f64 = 3.0;
+/// Flame Wave: a token singe; its worth is the shove back to the spawn edge
+const FLAME_MULT: f64 = 0.3;
+/// Chain Lightning: 120% of a strike on the first foe, each jump 40% weaker (x0.6), up to 5 foes
+const CHAIN_FIRST: f64 = 1.2;
+const CHAIN_FALLOFF: f64 = 0.6;
+const CHAIN_MAX: usize = 5;
+const CHAIN_JUMP: f64 = 0.6; // furthest a bolt will leap to the next foe
+const CHAIN_STUN: f64 = 0.5;
+/// Frozen Hell: every foe on the field held in ice for 3 s (bosses half as long);
+/// the ice shatters for damage as it lets go, and thawed foes resist fresh ice briefly
+const HELL_FREEZE: f64 = 3.0;
+const HELL_CAST_MULT: f64 = 0.5;
+const HELL_SHATTER_MULT: f64 = 2.0;
+const THAW_GRACE: f64 = 1.5;
 const CHARS: [CharDef; N_CHARS] = [
     CharDef {
-        key: "asura", unlock: 0, dmg: 1.0, regen: 1.0,
+        key: "asura", unlock: 0, dmg: 1.0, regen: 1.0, aspd: 1.0,
         abs: [
-            AbDef { key: "wrath", unlock: 5, cd: 30.0, dur: 0.0 },
-            AbDef { key: "storm", unlock: 15, cd: 60.0, dur: 8.0 },
-            AbDef { key: "beads", unlock: 25, cd: 90.0, dur: 15.0 },
-            AbDef { key: "sixarms", unlock: 40, cd: 120.0, dur: 10.0 },
+            AbDef { key: "wrath", unlock: 5, cd: 30.0, dur: 0.0, cost: 0.0 },
+            AbDef { key: "storm", unlock: 15, cd: 60.0, dur: 8.0, cost: 0.0 },
+            AbDef { key: "beads", unlock: 25, cd: 90.0, dur: 15.0, cost: 0.0 },
+            AbDef { key: "sixarms", unlock: 40, cd: 120.0, dur: 10.0, cost: 0.0 },
         ],
     },
     // Daeva: trades some burst for sustain and control
     CharDef {
-        key: "daeva", unlock: 50, dmg: 0.85, regen: 1.6,
+        key: "daeva", unlock: 50, dmg: 0.85, regen: 1.6, aspd: 1.0,
         abs: [
-            AbDef { key: "tide", unlock: 5, cd: 30.0, dur: 0.0 },
-            AbDef { key: "rain", unlock: 15, cd: 60.0, dur: 10.0 },
-            AbDef { key: "whirlpool", unlock: 25, cd: 75.0, dur: 8.0 },
-            AbDef { key: "lotus", unlock: 40, cd: 100.0, dur: 12.0 },
+            AbDef { key: "tide", unlock: 5, cd: 30.0, dur: 0.0, cost: 0.0 },
+            AbDef { key: "rain", unlock: 15, cd: 60.0, dur: 10.0, cost: 0.0 },
+            AbDef { key: "whirlpool", unlock: 25, cd: 75.0, dur: 8.0, cost: 0.0 },
+            AbDef { key: "lotus", unlock: 40, cd: 100.0, dur: 12.0, cost: 0.0 },
+        ],
+    },
+    // Sorcerer: close-range hand bursts that splash; arcane, flame, lightning and ice spells cost mana
+    // (refilled by his strikes) instead of running on cooldowns
+    CharDef {
+        key: "sorcerer", unlock: 100, dmg: 1.0, regen: 1.0, aspd: 0.92,
+        abs: [
+            AbDef { key: "bolts", unlock: 5, cd: 0.0, dur: 0.0, cost: 25.0 },
+            AbDef { key: "flame", unlock: 15, cd: 0.0, dur: 0.0, cost: 35.0 },
+            AbDef { key: "chain", unlock: 25, cd: 0.0, dur: 0.0, cost: 20.0 },
+            AbDef { key: "hell", unlock: 40, cd: 0.0, dur: 3.0, cost: 80.0 },
         ],
     },
 ];
@@ -331,6 +383,10 @@ struct Enemy {
     flash: f64,
     phase: f64,
     slow: f64,
+    frozen: f64, // seconds left encased in ice: no movement, no attacks
+    stun: f64,   // seconds left paralyzed by lightning: no movement, no attacks
+    shatter: f64, // damage dealt when the ice lets go (Frozen Hell)
+    thaw: f64,   // seconds of resistance to fresh ice after thawing
 }
 
 #[wasm_bindgen]
@@ -361,6 +417,11 @@ pub struct Game {
     rain_acc: f64,
     pool_acc: f64,
     lotus_acc: f64,
+    // Sorcerer state
+    mana: f64,
+    gcd: f64,
+    auto_lock: f64,
+    zero_r: f64,
 }
 
 #[wasm_bindgen]
@@ -392,8 +453,13 @@ impl Game {
             rain_acc: 0.0,
             pool_acc: 0.0,
             lotus_acc: 0.0,
+            mana: 0.0,
+            gcd: 0.0,
+            auto_lock: 0.0,
+            zero_r: 0.0,
         };
         g.hp = g.max_hp();
+        g.mana = g.max_mana();
         g.start_wave();
         g
     }
@@ -422,7 +488,7 @@ impl Game {
         d
     }
     pub fn attack_speed(&self) -> f64 {
-        let mut a = (1.0 + 0.075 * self.s.up[1] as f64) * (1.0 + 0.06 * self.s.shop[3] as f64);
+        let mut a = (1.0 + 0.075 * self.s.up[1] as f64) * (1.0 + 0.06 * self.s.shop[3] as f64) * CHARS[self.s.ch as usize].aspd;
         if self.asura() && self.active[1] > 0.0 {
             a *= 2.5;
         }
@@ -450,6 +516,25 @@ impl Game {
     }
     pub fn siphon(&self) -> f64 {
         0.005 * self.s.up[9] as f64
+    }
+    /// Sorcerer mana pool: 100, +12% per Mana Pool level, +15% per Deep Well bead level
+    pub fn max_mana(&self) -> f64 {
+        100.0 * (1.0 + 0.12 * self.s.up[UP_MANAPOOL] as f64) * (1.0 + 0.15 * self.s.shop[SHOP_MANAPOOL] as f64)
+    }
+    /// mana refilled by each normal strike (once per swing, however many foes it hits)
+    pub fn mana_per_strike(&self) -> f64 {
+        6.0 * (1.0 + 0.12 * self.s.up[UP_MANAREGEN] as f64) * (1.0 + 0.15 * self.s.shop[SHOP_MANAREGEN] as f64)
+    }
+    /// Ability Power (rebirth): +10% damage and healing from every character's abilities
+    pub fn ability_power(&self) -> f64 {
+        1.0 + 0.1 * self.s.shop[SHOP_ABILITY] as f64
+    }
+    /// ...and a little longer freezes (+3% per level, capped at +75%)
+    fn freeze_mult(&self) -> f64 {
+        1.0 + 0.03 * (self.s.shop[SHOP_ABILITY].min(25)) as f64
+    }
+    fn sorc(&self) -> bool {
+        self.s.ch == CH_SORC
     }
     fn asura(&self) -> bool {
         self.s.ch == CH_ASURA
@@ -480,7 +565,10 @@ impl Game {
             self.s.cds = vec![0.0; N_AB];
             self.active = [0.0; N_AB];
             self.pool_r = 0.0;
+            self.zero_r = 0.0;
+            self.gcd = 0.0;
             self.hp = self.max_hp() * frac;
+            self.mana = self.max_mana() * 0.5;
             self.push_ev(EV_SWITCH, 0.0, 0.0, id as f64, 0.0, 0.0);
         }
         true
@@ -583,6 +671,10 @@ impl Game {
             flash: 0.0,
             phase: self.rng.next() * 10.0,
             slow: 0.0,
+            frozen: 0.0,
+            stun: 0.0,
+            shatter: 0.0,
+            thaw: 0.0,
         };
         self.next_id = self.next_id.wrapping_add(1);
         if boss {
@@ -624,7 +716,11 @@ impl Game {
                 self.active[i] = (self.active[i] - dt).max(0.0);
             }
         }
-        if self.s.autocast {
+        self.gcd = (self.gcd - dt).max(0.0);
+        self.auto_lock = (self.auto_lock - dt).max(0.0);
+        if self.s.autocast && self.sorc() {
+            self.sorc_autocast();
+        } else if self.s.autocast {
             for i in 0..N_AB {
                 let sustain = if self.asura() { i == 2 } else { i == 1 || i == 3 };
                 if self.can_cast(i) && (i != 0 || !self.enemies.is_empty()) && (!sustain || self.hp < self.max_hp() * 0.6 || !self.enemies.is_empty()) {
@@ -681,6 +777,9 @@ impl Game {
         if self.daeva() {
             self.daeva_step(dt);
         }
+        if self.sorc() {
+            self.sorc_step(dt);
+        }
 
         // regen
         let maxhp = self.max_hp();
@@ -688,6 +787,7 @@ impl Game {
 
         // enemy movement & attacks
         let mut hurt = 0.0;
+        let mut thawed: Vec<usize> = Vec::new();
         let n = self.enemies.len();
         for i in 0..n {
             let (ex, ey, size) = (self.enemies[i].x, self.enemies[i].y, self.enemies[i].size);
@@ -697,6 +797,19 @@ impl Game {
             e.age += dt;
             e.flash = (e.flash - dt).max(0.0);
             e.slow = (e.slow - dt).max(0.0);
+            e.thaw = (e.thaw - dt).max(0.0);
+            if e.frozen > 0.0 {
+                e.frozen = (e.frozen - dt).max(0.0);
+                if e.frozen <= 0.0 {
+                    e.thaw = THAW_GRACE;
+                    thawed.push(i);
+                }
+                continue; // encased: no step, no strike
+            }
+            if e.stun > 0.0 {
+                e.stun = (e.stun - dt).max(0.0);
+                continue; // paralyzed: no step, no strike
+            }
             if d > stop {
                 let sp = e.speed * if e.slow > 0.0 { 0.4 } else { 1.0 };
                 let mv = (sp * dt).min(d - stop);
@@ -710,6 +823,16 @@ impl Game {
                 }
             }
         }
+        // Frozen Hell's ice shatters as it lets go
+        for &i in &thawed {
+            let (x, y, amt) = (self.enemies[i].x, self.enemies[i].y, self.enemies[i].shatter);
+            self.enemies[i].shatter = 0.0;
+            self.push_ev(EV_SHATTER, x, y, 0.0, 0.0, 0.0);
+            if amt > 0.0 && self.enemies[i].hp > 0.0 {
+                let (a, c) = self.roll_hit(amt);
+                self.damage_enemy(i, a, c, 9.0);
+            }
+        }
         // light separation so crowds fan out around him
         for i in 0..n {
             for j in (i + 1)..n {
@@ -718,13 +841,22 @@ impl Game {
                 let min = (self.enemies[i].size + self.enemies[j].size) * 0.32;
                 let d2 = dx * dx + dy * dy;
                 if d2 < min * min && d2 > 1e-9 {
+                    // frozen foes are blocks of ice: the crowd flows around them
+                    let (fi, fj) = (self.enemies[i].frozen > 0.0, self.enemies[j].frozen > 0.0);
+                    if fi && fj {
+                        continue;
+                    }
                     let d = d2.sqrt();
-                    let push = (min - d) * 0.5;
+                    let push = (min - d) * if fi || fj { 1.0 } else { 0.5 };
                     let (ux, uy) = (dx / d * push, dy / d * push);
-                    self.enemies[i].x -= ux;
-                    self.enemies[i].y -= uy;
-                    self.enemies[j].x += ux;
-                    self.enemies[j].y += uy;
+                    if !fi {
+                        self.enemies[i].x -= ux;
+                        self.enemies[i].y -= uy;
+                    }
+                    if !fj {
+                        self.enemies[j].x += ux;
+                        self.enemies[j].y += uy;
+                    }
                 }
             }
         }
@@ -794,14 +926,16 @@ impl Game {
 
     fn damage_enemy(&mut self, idx: usize, amount: f64, crit: bool, kind: f64) {
         let lifesteal = self.siphon();
+        // ice makes foes brittle: +20% damage from everything while frozen
+        let amount = if self.enemies[idx].frozen > 0.0 { amount * 1.2 } else { amount };
         let e = &mut self.enemies[idx];
         let dealt = amount.min(e.hp.max(0.0));
         e.hp -= amount;
         e.flash = 0.12;
         let (x, y) = (e.x, e.y);
-        // tiny knockback
+        // tiny knockback (ice holds frozen foes in place)
         let d = (x * x + y * y).sqrt().max(1e-6);
-        if !e.boss {
+        if !e.boss && e.frozen <= 0.0 {
             e.x += x / d * 0.006;
             e.y += y / d * 0.006;
         }
@@ -833,6 +967,11 @@ impl Game {
         self.face = if fx < 0.0 { -1.0 } else { 1.0 };
         self.atk_anim = 0.18;
         self.push_ev(EV_ATTACK, fx, fy, n as f64, 0.0, 0.0);
+        if self.sorc() {
+            self.mana = (self.mana + self.mana_per_strike()).min(self.max_mana());
+            self.sorc_strike(&cands[..n], base);
+            return true;
+        }
         for t in 0..n {
             let idx = cands[t].1;
             let (amt, crit) = self.roll_hit(base);
@@ -850,7 +989,7 @@ impl Game {
                 .collect();
             if !alive.is_empty() {
                 let pick = alive[(self.rng.next() * alive.len() as f64) as usize % alive.len()];
-                let (amt, crit) = self.roll_hit(base * 0.6);
+                let (amt, crit) = self.roll_hit(base * 0.6 * self.ability_power());
                 let (tx, ty) = (self.enemies[pick].x, self.enemies[pick].y);
                 self.push_ev(EV_CHAIN, tx, ty, 0.0, 0.0, 0.0);
                 self.damage_enemy(pick, amt, crit, 1.0);
@@ -892,13 +1031,23 @@ impl Game {
     // ------------------------------------------------------------ abilities
 
     pub fn can_cast(&self, i: usize) -> bool {
-        i < N_AB && self.s.best_wave >= self.ab(i).unlock && self.s.cds[i] <= 0.0
+        if i >= N_AB || self.s.best_wave < self.ab(i).unlock {
+            return false;
+        }
+        if self.sorc() {
+            // no cooldowns: only mana and the short global lockout
+            return self.gcd <= 0.0 && self.mana + 1e-9 >= self.ab(i).cost;
+        }
+        self.s.cds[i] <= 0.0
     }
 
     pub fn cast(&mut self, i: u32) -> bool {
         let i = i as usize;
         if !self.can_cast(i) {
             return false;
+        }
+        if self.sorc() {
+            return self.sorc_cast(i);
         }
         self.s.cds[i] = self.ab(i).cd * self.cd_mult();
         self.active[i] = self.ab(i).dur;
@@ -912,7 +1061,7 @@ impl Game {
                 // Wrath Burst — radial shockwave
                 let radius = self.range() * 1.6;
                 self.push_ev(EV_WRATH, 0.0, 0.0, radius, 0.0, 0.0);
-                let base = self.damage() * 20.0;
+                let base = self.damage() * 20.0 * self.ability_power();
                 for idx in 0..self.enemies.len() {
                     let (x, y) = (self.enemies[idx].x, self.enemies[idx].y);
                     let d = (x * x + y * y).sqrt().max(1e-6);
@@ -931,7 +1080,7 @@ impl Game {
             }
             2 => {
                 let mh = self.max_hp();
-                let heal = mh * 0.6;
+                let heal = mh * 0.6 * self.ability_power();
                 self.hp = (self.hp + heal).min(mh);
                 self.push_ev(EV_HEAL, 0.0, 0.0, heal, 0.0, 0.0);
             }
@@ -982,8 +1131,12 @@ impl Game {
             return 0;
         }
         let hp_frac = self.hp / self.max_hp();
+        let mana_frac = self.mana / self.max_mana();
         self.s.souls = (self.s.souls - cost).max(0.0);
         self.s.up[i] += n;
+        if i == UP_MANAPOOL {
+            self.mana = mana_frac * self.max_mana();
+        }
         if i == 6 {
             self.hp = hp_frac * self.max_hp();
         }
@@ -1047,6 +1200,8 @@ impl Game {
         self.s.rate_sps = 0.0;
         self.s.rate_kps = 0.0;
         self.hp = self.max_hp();
+        self.mana = self.max_mana();
+        self.zero_r = 0.0;
         self.start_wave();
         g
     }
@@ -1115,6 +1270,8 @@ impl Game {
                 self.s = s;
                 self.active = [0.0; N_AB];
                 self.hp = self.max_hp();
+                self.mana = self.max_mana() * 0.5;
+                self.zero_r = 0.0;
                 self.start_wave();
                 true
             }
@@ -1180,6 +1337,7 @@ impl Game {
     // ------------------------------------------------------------ render feed
 
     /// Flat enemy buffer: [id, kind, x, y, hpFrac, size, age, flash, phase, boss, slow] * n
+    /// (slow in (-100, 0) means frozen for -slow seconds; slow <= -100 means paralyzed)
     pub fn enemies(&self) -> Vec<f32> {
         let mut v = Vec::with_capacity(self.enemies.len() * ENEMY_STRIDE);
         for e in &self.enemies {
@@ -1194,7 +1352,9 @@ impl Game {
                 e.flash as f32,
                 e.phase as f32,
                 if e.boss { 1.0 } else { 0.0 },
-                e.slow as f32,
+                // frozen foes report the ice time left as a negative value; paralyzed
+                // foes report -(100 + seconds left)
+                if e.frozen > 0.0 { -(e.frozen.max(0.01)) as f32 } else if e.stun > 0.0 { -(100.0 + e.stun) as f32 } else { e.slow as f32 },
             ]);
         }
         v
@@ -1236,6 +1396,13 @@ impl Game {
             self.pool.0,
             self.pool.1,
             self.pool_r,
+            // 24.. Sorcerer: [manaFrac, mana, maxMana, hellLeft, hellR, gcd]
+            if self.sorc() { (self.mana / self.max_mana()).clamp(0.0, 1.0) } else { 0.0 },
+            self.mana,
+            self.max_mana(),
+            if self.sorc() { self.active[3] } else { 0.0 },
+            if self.sorc() { self.zero_r } else { 0.0 },
+            self.gcd,
         ]
     }
 
@@ -1252,6 +1419,7 @@ impl Game {
                 tmp.s.up[i] += n.max(if maxed { 0 } else { 1 });
                 let next = tmp.stat_value(i);
                 serde_json::json!({
+                    "only": if i == UP_MANAPOOL || i == UP_MANAREGEN { "sorcerer" } else { "" },
                     "key": d.key, "lvl": self.s.up[i], "max": d.max, "n": n, "cost": cost,
                     "afford": !maxed && n > 0 && cost <= self.s.souls * (1.0 + 1e-9), "maxed": maxed,
                     "now": now, "next": next,
@@ -1263,7 +1431,10 @@ impl Game {
                 let d = &SHOP[i];
                 let maxed = d.max > 0 && self.s.shop[i] >= d.max;
                 let c = self.shop_cost(i);
+                // the mana beads show once the Sorcerer has been unlocked
+                let shown = !(i == SHOP_MANAPOOL || i == SHOP_MANAREGEN) || self.s.unlocked & (1 << CH_SORC) != 0;
                 serde_json::json!({
+                    "shown": shown,
                     "key": d.key, "lvl": self.s.shop[i], "max": d.max, "cost": c,
                     "afford": !maxed && self.s.beads >= c, "maxed": maxed,
                 })
@@ -1275,12 +1446,13 @@ impl Game {
                 serde_json::json!({
                     "key": d.key, "unlock": d.unlock, "unlocked": self.s.best_wave >= d.unlock,
                     "cd": self.s.cds[i], "cdMax": d.cd * self.cd_mult(), "active": self.active[i], "dur": d.dur,
+                    "cost": d.cost, "afford": d.cost <= 0.0 || self.mana + 1e-9 >= d.cost, "gcd": self.gcd,
                 })
             })
             .collect();
         let (sps, _) = self.estimate_rates();
         let chars: Vec<serde_json::Value> = CHARS.iter().enumerate().map(|(i, c)| {
-            let abs: Vec<serde_json::Value> = c.abs.iter().map(|a| serde_json::json!({"key": a.key, "unlock": a.unlock, "cd": a.cd, "dur": a.dur})).collect();
+            let abs: Vec<serde_json::Value> = c.abs.iter().map(|a| serde_json::json!({"key": a.key, "unlock": a.unlock, "cd": a.cd, "dur": a.dur, "cost": a.cost})).collect();
             serde_json::json!({ "id": i, "key": c.key, "unlock": c.unlock, "unlocked": self.s.unlocked & (1 << i) != 0, "abs": abs })
         }).collect();
         serde_json::json!({
@@ -1296,6 +1468,7 @@ impl Game {
             "offlineEff": self.offline_eff(), "offlineCap": self.offline_cap(), "cdMult": self.cd_mult(),
             "sps": sps, "ups": ups, "shop": shop, "abs": abs,
             "char": CHARS[self.s.ch as usize].key, "charId": self.s.ch,
+            "mana": self.mana, "maxMana": self.max_mana(), "manaGain": self.mana_per_strike(), "abilityPower": self.ability_power(),
             "chars": chars,
         })
         .to_string()
@@ -1327,6 +1500,10 @@ impl Game {
             rain_acc: 0.0,
             pool_acc: 0.0,
             lotus_acc: 0.0,
+            mana: g.mana,
+            gcd: 0.0,
+            auto_lock: 0.0,
+            zero_r: 0.0,
         }
     }
 
@@ -1342,6 +1519,8 @@ impl Game {
             7 => self.regen(),
             8 => self.soul_mult(),
             9 => self.siphon(),
+            10 => self.max_mana(),
+            11 => self.mana_per_strike(),
             _ => 0.0,
         }
     }
@@ -1370,11 +1549,14 @@ impl Game {
                         if i == 9 || i == 2 && self.s.up[2] > 12 {
                             continue;
                         }
+                        if (i == UP_MANAPOOL || i == UP_MANAREGEN) && !self.sorc() {
+                            continue;
+                        }
                         let (n, c) = self.up_quote(i, 1);
                         if n == 0 {
                             continue;
                         }
-                        let w = match i { 0 => 1.0, 6 => 1.6, 7 => 2.5, 8 => 1.5, _ => 1.2 };
+                        let w = match i { 0 => 1.0, 6 => 1.6, 7 => 2.5, 8 => 1.5, 10 => 2.0, 11 => 1.6, _ => 1.2 };
                         let score = c * w;
                         if best.map_or(true, |(_, s)| score < s) {
                             best = Some((i, score));
@@ -1385,9 +1567,14 @@ impl Game {
                         _ => break,
                     }
                 }
-                for i in 0..N_AB {
-                    if self.can_cast(i) {
-                        self.cast(i as u32);
+                if self.sorc() {
+                    self.auto_lock = 0.0;
+                    self.sorc_autocast();
+                } else {
+                    for i in 0..N_AB {
+                        if self.can_cast(i) {
+                            self.cast(i as u32);
+                        }
                     }
                 }
             }
@@ -1418,7 +1605,7 @@ impl Game {
                 // but it shoves foes far back and leaves them slowed
                 let radius = self.range() * 1.8;
                 self.push_ev(EV_TIDE, 0.0, 0.0, radius, 0.0, 0.0);
-                let base = self.damage() * 10.0;
+                let base = self.damage() * 10.0 * self.ability_power();
                 for idx in 0..self.enemies.len() {
                     let (x, y) = (self.enemies[idx].x, self.enemies[idx].y);
                     let d = (x * x + y * y).sqrt().max(1e-6);
@@ -1439,7 +1626,7 @@ impl Game {
             1 => {
                 // Healing Rain — opens with a small heal; the rest ticks in daeva_step
                 let mh = self.max_hp();
-                let heal = mh * 0.1;
+                let heal = mh * 0.1 * self.ability_power();
                 self.hp = (self.hp + heal).min(mh);
                 self.push_ev(EV_HEAL, 0.0, 0.0, heal, 0.0, 0.0);
                 self.rain_acc = 0.0;
@@ -1469,7 +1656,7 @@ impl Game {
             3 => {
                 // Blue Lotus Beads — orbiting beads that heal per hit and shield her
                 let mh = self.max_hp();
-                let heal = mh * 0.2;
+                let heal = mh * 0.2 * self.ability_power();
                 self.hp = (self.hp + heal).min(mh);
                 self.push_ev(EV_HEAL, 0.0, 0.0, heal, 1.0, 0.0);
                 self.lotus_acc = 0.0;
@@ -1480,10 +1667,11 @@ impl Game {
 
     fn daeva_step(&mut self, dt: f64) {
         let mh = self.max_hp();
-        let base = self.damage();
+        let ap = self.ability_power();
+        let base = self.damage() * ap;
         // Healing Rain: 4% max HP per second; droplets strike foes on the field
         if self.active[1] > 0.0 {
-            self.hp = (self.hp + mh * 0.04 * dt).min(mh);
+            self.hp = (self.hp + mh * 0.04 * ap * dt).min(mh);
             self.rain_acc += dt;
             while self.rain_acc >= 0.2 {
                 self.rain_acc -= 0.2;
@@ -1541,16 +1729,215 @@ impl Game {
                     if e.hp > 0.0 && d < 0.3 + e.size * 0.3 {
                         let (amt, crit) = self.roll_hit(base * 0.6);
                         self.damage_enemy(idx, amt, crit, 5.0);
-                        healed += mh * 0.004;
+                        healed += mh * 0.004 * ap;
                     }
                 }
-                let healed = healed.min(mh * 0.03);
+                let healed = healed.min(mh * 0.03 * ap);
                 if healed > 0.0 {
                     self.hp = (self.hp + healed).min(mh);
                 }
             }
         }
         self.reap();
+    }
+}
+
+// ---------------------------------------------------------------- Sorcerer
+impl Game {
+    fn dist(e: &Enemy) -> f64 {
+        (e.x * e.x + e.y * e.y).sqrt()
+    }
+    /// Encase foe `idx` in ice for `dur` seconds (bosses are held half as long).
+    /// Foes already in ice, or just thawed, are skipped. Returns whether it took.
+    fn freeze(&mut self, idx: usize, dur: f64) -> bool {
+        let d = dur * self.freeze_mult() * if self.enemies[idx].boss { 0.5 } else { 1.0 };
+        let e = &mut self.enemies[idx];
+        if e.hp <= 0.0 || e.frozen > 0.0 || e.thaw > 0.0 {
+            return false;
+        }
+        e.frozen = d;
+        e.stun = 0.0;
+        let (x, y, b) = (e.x, e.y, e.boss);
+        self.push_ev(EV_FREEZE, x, y, d, if b { 1.0 } else { 0.0 }, 0.0);
+        true
+    }
+    /// A normal swing: a close burst of energy from his hands on each target,
+    /// splashing foes packed around it.
+    fn sorc_strike(&mut self, targets: &[(f64, usize)], base: f64) {
+        let mut hit: Vec<usize> = targets.iter().map(|t| t.1).collect();
+        for t in targets {
+            let idx = t.1;
+            let (amt, crit) = self.roll_hit(base);
+            self.damage_enemy(idx, amt, crit, 6.0);
+            let (cx, cy) = (self.enemies[idx].x, self.enemies[idx].y);
+            let mut splashed = 0;
+            for j in 0..self.enemies.len() {
+                if splashed >= 3 || hit.contains(&j) {
+                    continue;
+                }
+                let e = &self.enemies[j];
+                if e.hp > 0.0 && (e.x - cx).powi(2) + (e.y - cy).powi(2) < BURST_R * BURST_R {
+                    let (a2, c2) = self.roll_hit(base * BURST_SPLASH);
+                    self.damage_enemy(j, a2, c2, 7.0);
+                    hit.push(j);
+                    splashed += 1;
+                }
+            }
+        }
+    }
+    /// the order Chain Lightning visits foes: the nearest foe to him, then each
+    /// time the nearest foe not yet struck within a jump of the last
+    fn chain_path(&self) -> Vec<usize> {
+        let alive = |e: &Enemy| e.hp > 0.0;
+        let first = self.enemies.iter().enumerate().filter(|(_, e)| alive(e))
+            .min_by(|a, b| Game::dist(a.1).partial_cmp(&Game::dist(b.1)).unwrap()).map(|(j, _)| j);
+        let mut path = Vec::new();
+        let mut cur = match first { Some(j) => j, None => return path };
+        path.push(cur);
+        while path.len() < CHAIN_MAX {
+            let (cx, cy) = (self.enemies[cur].x, self.enemies[cur].y);
+            let next = self.enemies.iter().enumerate()
+                .filter(|(j, e)| alive(e) && !path.contains(j))
+                .map(|(j, e)| (((e.x - cx).powi(2) + (e.y - cy).powi(2)).sqrt(), j))
+                .filter(|(d, _)| *d <= CHAIN_JUMP)
+                .min_by(|a, b| a.0.partial_cmp(&b.0).unwrap());
+            match next {
+                Some((_, j)) => { path.push(j); cur = j; }
+                None => break, // nobody left to leap to: the bolt grounds out
+            }
+        }
+        path
+    }
+    fn sorc_cast(&mut self, i: usize) -> bool {
+        let ap = self.ability_power();
+        let base = self.damage() * ap;
+        if !self.enemies.iter().any(|e| e.hp > 0.0) {
+            return false; // nothing to strike: no mana spent
+        }
+        match i {
+            0 => {
+                // Arcane Bolts: three bolts seek the furthest foes on the field
+                let mut c: Vec<(f64, usize)> = self.enemies.iter().enumerate()
+                    .filter(|(_, e)| e.hp > 0.0).map(|(j, e)| (Game::dist(e), j)).collect();
+                c.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap());
+                self.spend(i);
+                for (k, &(_, idx)) in c.iter().take(3).enumerate() {
+                    let (x, y) = (self.enemies[idx].x, self.enemies[idx].y);
+                    self.push_ev(EV_BOLT, x, y, k as f64, 0.0, 0.0);
+                    let (amt, crit) = self.roll_hit(base * BOLT_MULT);
+                    self.damage_enemy(idx, amt, crit, 10.0);
+                }
+            }
+            1 => {
+                // Flame Wave: a wave of flame-ink rolls out and drives every foe
+                // (bosses too) back to the spawn edge, singeing them
+                self.spend(i);
+                self.push_ev(EV_FLAME, 0.0, 0.0, SPAWN_RADIUS, 0.0, 0.0);
+                for idx in 0..self.enemies.len() {
+                    if self.enemies[idx].hp <= 0.0 {
+                        continue;
+                    }
+                    let (amt, crit) = self.roll_hit(base * FLAME_MULT);
+                    self.damage_enemy(idx, amt, crit, 11.0);
+                    let e = &mut self.enemies[idx];
+                    let (x, y) = (e.x, e.y);
+                    let d = (x * x + y * y).sqrt();
+                    let (ux, uy) = if d > 1e-6 { (x / d, y / d) } else { (1.0, 0.0) };
+                    if d < SPAWN_RADIUS {
+                        let (nx, ny) = clear_cone(ux * SPAWN_RADIUS, uy * SPAWN_RADIUS);
+                        e.x = nx;
+                        e.y = ny;
+                    }
+                    e.atk_timer = e.atk_timer.max(0.6);
+                }
+            }
+            2 => {
+                // Chain Lightning: leaps foe to foe, nearest first, paralyzing each
+                let path = self.chain_path();
+                self.spend(i);
+                let (mut px, mut py) = (0.0, 0.0);
+                let mut mult = CHAIN_FIRST;
+                let stun = CHAIN_STUN * self.freeze_mult();
+                for (k, &idx) in path.iter().enumerate() {
+                    let (x, y) = (self.enemies[idx].x, self.enemies[idx].y);
+                    self.push_ev(EV_ARC, x, y, k as f64, px, py);
+                    let (amt, crit) = self.roll_hit(base * mult);
+                    if self.enemies[idx].frozen <= 0.0 {
+                        self.enemies[idx].stun = self.enemies[idx].stun.max(stun);
+                    }
+                    self.damage_enemy(idx, amt, crit, 12.0);
+                    mult *= CHAIN_FALLOFF;
+                    px = x;
+                    py = y;
+                }
+            }
+            3 => {
+                // Frozen Hell: every foe on the field is locked in ice
+                self.spend(i);
+                let dur = self.ab(3).dur * self.freeze_mult();
+                self.active[3] = dur;
+                self.zero_r = SPAWN_RADIUS + 0.15;
+                self.push_ev(EV_HELL, 0.0, 0.0, self.zero_r, dur, 0.0);
+                for idx in 0..self.enemies.len() {
+                    if self.enemies[idx].hp > 0.0 && self.freeze(idx, HELL_FREEZE) {
+                        self.enemies[idx].shatter = base * HELL_SHATTER_MULT;
+                        let (amt, crit) = self.roll_hit(base * HELL_CAST_MULT);
+                        self.damage_enemy(idx, amt, crit, 8.0);
+                    }
+                }
+            }
+            _ => return false,
+        }
+        self.reap();
+        true
+    }
+    fn spend(&mut self, i: usize) {
+        self.mana = (self.mana - self.ab(i).cost).max(0.0);
+        self.gcd = SORC_GCD;
+        self.push_ev(EV_CAST, 0.0, 0.0, i as f64, CH_SORC as f64, 0.0);
+    }
+    fn sorc_step(&mut self, _dt: f64) {
+        if self.active[3] <= 0.0 {
+            self.zero_r = 0.0;
+        }
+    }
+    /// Auto-cast (when enabled): spends mana sensibly, keeping a reserve for
+    /// emergencies, with a short lockout so it never machine-guns his mana.
+    fn sorc_autocast(&mut self) {
+        if self.auto_lock > 0.0 || self.gcd > 0.0 || self.enemies.is_empty() {
+            return;
+        }
+        let range = self.range();
+        let mm = self.max_mana();
+        let reserve = mm * 0.2;
+        let near = |e: &Enemy, r: f64| e.hp > 0.0 && Game::dist(e) <= r;
+        let nn = self.enemies.iter().filter(|e| near(e, range * 1.5)).count();
+        let freezable = |e: &Enemy| e.hp > 0.0 && e.frozen <= 0.0 && e.thaw <= 0.0;
+        let boss_free = self.enemies.iter().any(|e| e.boss && freezable(e) && near(e, range * 2.0));
+        let n_free = self.enemies.iter().filter(|e| freezable(e) && near(e, range * 2.0)).count();
+        let far = self.enemies.iter().filter(|e| e.hp > 0.0 && Game::dist(e) > range * 1.2).count();
+        let chain_len = self.chain_path().len();
+        let low = self.hp < self.max_hp() * 0.4;
+        let ok = |g: &Game, i: usize, keep: f64| g.can_cast(i) && g.mana >= g.ab(i).cost + keep;
+        let pick = if ok(self, 3, 0.0) && (n_free >= 8 || boss_free || low && n_free >= 2) {
+            Some(3)
+        } else if ok(self, 1, 0.0) && low && nn >= 3 {
+            Some(1) // emergency: shove the crowd back to the edge
+        } else if ok(self, 2, reserve) && chain_len >= 3 {
+            Some(2)
+        } else if ok(self, 0, reserve) && far >= 2 {
+            Some(0)
+        } else if self.mana >= mm * 0.92 {
+            // about to cap: spend rather than waste the refill
+            [2usize, 0].into_iter().find(|&i| ok(self, i, 0.0))
+        } else {
+            None
+        };
+        if let Some(i) = pick {
+            if self.cast(i as u32) {
+                self.auto_lock = 0.6;
+            }
+        }
     }
 }
 
@@ -1664,6 +2051,269 @@ mod tests {
         assert_eq!(f[7], 0.0, "no Asura storm visuals while she is active");
     }
 
+    fn sorc_game(seed: f64) -> Game {
+        let mut g = Game::new(seed);
+        g.debug_set_wave(100);
+        assert!(g.set_char(CH_SORC));
+        g
+    }
+
+    #[test]
+    fn sorcerer_unlocks_at_100_and_loads_from_old_saves() {
+        let mut g = Game::new(3.0);
+        g.debug_set_wave(99);
+        assert!(!g.set_char(CH_SORC), "locked before wave 100");
+        g.debug_set_wave(100);
+        assert!(g.s.unlocked & 4 != 0);
+        assert!(g.set_char(CH_SORC));
+        // an old save with only 10 upgrades / 7 shop items and no mana fields
+        let mut o = Game::new(4.0);
+        assert!(o.load_json(r#"{"v":1,"souls":5,"wave":120,"best_wave":130,"up":[1,2,3,4,5,6,7,8,9,10],"shop":[1,1,1,1,1,1,1],"ch":1,"unlocked":3}"#));
+        assert_eq!(o.s.up.len(), N_UP);
+        assert_eq!(o.s.shop.len(), N_SHOP);
+        assert_eq!(o.s.up[UP_MANAPOOL], 0);
+        assert_eq!(o.s.shop[SHOP_ABILITY], 0);
+        assert!(o.s.unlocked & 4 != 0, "best wave >= 100 unlocks him at once");
+        assert_eq!(o.s.ch, 1);
+        assert!(o.mana > 0.0);
+    }
+
+    #[test]
+    fn mana_refills_on_strikes_and_abilities_spend_it_without_cooldowns() {
+        let mut g = sorc_game(5.0);
+        g.mana = 0.0;
+        // strikes refill mana, once per swing
+        let mut swings = 0;
+        for _ in 0..600 {
+            let ev_before = g.events.len();
+            g.tick(1.0 / 30.0);
+            swings += g.events[ev_before..].chunks(EVENT_STRIDE).filter(|c| c[0] == EV_ATTACK).count();
+            if swings >= 3 { break; }
+        }
+        assert!(swings >= 3, "he should have swung");
+        let expect = (g.mana_per_strike() * swings as f64).min(g.max_mana());
+        assert!((g.mana - expect).abs() < 1e-6, "mana {} vs {} after {} swings", g.mana, expect, swings);
+        // abilities: no cooldown, only mana and a short global lockout
+        g.mana = g.max_mana();
+        g.debug_set_wave(100);
+        for _ in 0..200 { g.tick(1.0 / 30.0); if g.enemies.len() >= 3 { break; } }
+        let m0 = g.mana;
+        assert!(g.cast(1), "flame wave casts");
+        assert!((m0 - g.mana - 35.0).abs() < 1e-9);
+        assert!(!g.cast(1), "global lockout blocks an instant double tap");
+        g.gcd = 0.0;
+        assert!(g.cast(1), "no cooldown: casts again once the lockout passes");
+        assert_eq!(g.s.cds, vec![0.0; N_AB]);
+        g.gcd = 0.0;
+        g.mana = 34.0;
+        assert!(!g.can_cast(1), "not enough mana");
+        assert!(!g.cast(1));
+        assert_eq!(g.mana, 34.0);
+        // Frozen Hell can be cast again at once (no cooldown) given the mana
+        g.mana = g.max_mana();
+        assert!(g.cast(3));
+        assert!(g.active[3] >= 3.0 && g.zero_r > SPAWN_RADIUS);
+        g.gcd = 0.0;
+        g.mana = g.max_mana();
+        assert!(g.can_cast(3), "no cooldown on Frozen Hell either");
+    }
+
+    /// a sorcerer facing hand-placed, unkillable foes and nothing else
+    fn sorc_field(seed: f64, pts: &[(f64, f64)]) -> Game {
+        let mut g = sorc_game(seed);
+        g.enemies.clear();
+        g.to_spawn = 0; g.boss_pending = false;
+        for &(x, y) in pts {
+            g.spawn(false);
+            let e = g.enemies.last_mut().unwrap();
+            e.x = x; e.y = y; e.hp = 1e15; e.max_hp = 1e15;
+        }
+        g.mana = g.max_mana();
+        g.events.clear();
+        g
+    }
+    fn hits_of(g: &Game, kind: f64) -> Vec<(f64, f64, f64, bool)> {
+        g.events.chunks(EVENT_STRIDE).filter(|c| c[0] == EV_HIT && c[5] == kind).map(|c| (c[1], c[2], c[3], c[4] > 0.0)).collect()
+    }
+
+    #[test]
+    fn arcane_bolts_strike_the_three_furthest() {
+        let mut g = sorc_field(11.0, &[(0.1, 0.0), (0.3, 0.1), (-0.5, 0.2), (0.0, 0.9), (0.8, -0.3), (-0.2, -0.15)]);
+        assert!(g.cast(0));
+        let mut xs: Vec<(f64, f64)> = hits_of(&g, 10.0).iter().map(|h| (h.0, h.1)).collect();
+        xs.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap());
+        assert_eq!(xs.len(), 3, "three bolts");
+        let want = [(-0.5, 0.2), (0.0, 0.9), (0.8, -0.3)];
+        for (h, w) in xs.iter().zip(want.iter()) {
+            assert!((h.0 - w.0).abs() < 0.02 && (h.1 - w.1).abs() < 0.02, "bolt hit {:?} wanted {:?}", h, w);
+        }
+        assert_eq!(g.events.chunks(EVENT_STRIDE).filter(|c| c[0] == EV_BOLT).count(), 3);
+        // fewer foes than bolts: each foe still takes exactly one
+        let mut g = sorc_field(12.0, &[(0.4, 0.1)]);
+        assert!(g.cast(0));
+        assert_eq!(hits_of(&g, 10.0).len(), 1);
+        // nobody on the field: no cast, no mana spent
+        let mut g = sorc_field(13.0, &[]);
+        let m = g.mana;
+        assert!(!g.cast(0));
+        assert_eq!(g.mana, m);
+    }
+
+    #[test]
+    fn flame_wave_drives_every_foe_to_the_spawn_edge() {
+        let mut g = sorc_field(14.0, &[(0.1, 0.02), (0.3, 0.2), (-0.5, 0.25), (0.6, -0.4)]);
+        g.s.wave = 100; g.spawn(true);
+        { let e = g.enemies.last_mut().unwrap(); e.x = -0.2; e.y = -0.1; e.hp = 1e15; e.max_hp = 1e15; }
+        let hp: Vec<f64> = g.enemies.iter().map(|e| e.hp).collect();
+        assert!(g.cast(1));
+        for (e, h0) in g.enemies.iter().zip(hp) {
+            let d = Game::dist(e);
+            assert!((d - SPAWN_RADIUS).abs() < 0.03, "foe pushed to the edge, got {} (boss {})", d, e.boss);
+            let dealt = h0 - e.hp;
+            assert!(dealt > 0.0 && dealt < g.damage() * g.crit_mult(), "very low damage: {}", dealt);
+        }
+        assert!(g.events.chunks(EVENT_STRIDE).any(|c| c[0] == EV_FLAME));
+    }
+
+    #[test]
+    fn chain_lightning_leaps_nearest_first_with_falling_damage() {
+        // a line of foes stepping away from him, plus one far off that it cannot reach
+        let mut g = sorc_field(15.0, &[(0.3, 0.0), (0.15, 0.0), (0.45, 0.0), (0.6, 0.0), (0.75, 0.0), (0.9, 0.0), (-1.0, 0.0)]);
+        assert!(g.cast(2));
+        let arcs: Vec<Vec<f64>> = g.events.chunks(EVENT_STRIDE).filter(|c| c[0] == EV_ARC).map(|c| c.to_vec()).collect();
+        assert_eq!(arcs.len(), 5, "five foes at most");
+        let xs: Vec<f64> = arcs.iter().map(|c| c[1]).collect();
+        for (x, w) in xs.iter().zip([0.15, 0.3, 0.45, 0.6, 0.75]) { assert!((x - w).abs() < 0.02, "order {:?}", xs); }
+        assert_eq!((arcs[0][4], arcs[0][5]), (0.0, 0.0), "the first leaps from his hands");
+        assert!((arcs[1][4] - 0.15).abs() < 0.02, "each next leaps from the last");
+        let hits = hits_of(&g, 12.0);
+        assert_eq!(hits.len(), 5);
+        let base = g.damage() * g.ability_power();
+        for (k, h) in hits.iter().enumerate() {
+            let want = base * 1.2 * 0.6f64.powi(k as i32) * if h.3 { g.crit_mult() } else { 1.0 };
+            assert!((h.2 / want - 1.0).abs() < 0.11, "hit {} = {} want ~{} (±variance)", k, h.2, want);
+        }
+        // each struck foe is paralyzed for ~0.5 s: it does not move
+        let struck: Vec<usize> = (0..g.enemies.len()).filter(|&j| g.enemies[j].stun > 0.0).collect();
+        assert_eq!(struck.len(), 5);
+        assert!(struck.iter().all(|&j| (g.enemies[j].stun - 0.5).abs() < 1e-9));
+        assert!(g.enemies()[struck[0] * ENEMY_STRIDE + 10] <= -100.0, "the feed marks paralysis");
+        let p0: Vec<(f64, f64)> = struck.iter().map(|&j| (g.enemies[j].x, g.enemies[j].y)).collect();
+        for _ in 0..10 { g.tick(1.0 / 30.0); }
+        for (k, &j) in struck.iter().enumerate() { assert!((g.enemies[j].x - p0[k].0).abs() < 0.02, "paralyzed foes hold still"); }
+        for _ in 0..20 { g.tick(1.0 / 30.0); }
+        assert!(struck.iter().all(|&j| g.enemies[j].stun == 0.0), "paralysis wears off");
+        // stops early when nobody is left to leap to
+        let mut g = sorc_field(16.0, &[(0.2, 0.0), (0.3, 0.05)]);
+        assert!(g.cast(2));
+        assert_eq!(g.events.chunks(EVENT_STRIDE).filter(|c| c[0] == EV_ARC).count(), 2);
+    }
+
+    #[test]
+    fn frozen_hell_freezes_all_then_shatters() {
+        let pts: Vec<(f64, f64)> = (0..10).map(|k| { let a = k as f64 * 0.6 + 0.3; let r = 0.2 + 0.09 * k as f64; (a.cos() * r, a.sin() * r) }).collect();
+        let mut g = sorc_field(17.0, &pts);
+        g.s.wave = 100; g.spawn(true);
+        { let e = g.enemies.last_mut().unwrap(); e.x = 0.5; e.y = 0.3; e.hp = 1e15; e.max_hp = 1e15; }
+        assert!(g.cast(3));
+        for e in &g.enemies {
+            if e.boss { assert!((e.frozen - 1.5).abs() < 1e-9, "bosses held half as long: {}", e.frozen); }
+            else { assert!((e.frozen - 3.0).abs() < 1e-9, "every foe frozen 3 s: {}", e.frozen); }
+        }
+        let hp0 = g.hp;
+        g.enemies[0].x = 0.08; g.enemies[0].y = 0.0; g.enemies[0].atk_timer = 0.0;
+        g.tick(1.0 / 30.0); // hand-placed foes inside the keep-clear cones get nudged out once
+        let p0: Vec<(f64, f64)> = g.enemies.iter().map(|e| (e.x, e.y)).collect();
+        for _ in 0..30 { g.tick(1.0 / 30.0); }
+        assert!(g.hp >= hp0 - 1e-9, "frozen foes do not attack");
+        for (k, e) in g.enemies.iter().enumerate() { if !e.boss { assert_eq!((e.x, e.y), p0[k], "frozen foes do not move"); } }
+        assert!(g.enemies()[10] < 0.0 && g.enemies()[10] > -100.0);
+        // recasting while the ice holds does not extend it (no perma-freeze)
+        g.gcd = 0.0; g.mana = g.max_mana();
+        let left = g.enemies[0].frozen;
+        assert!(g.cast(3));
+        assert!((g.enemies[0].frozen - left).abs() < 1e-9);
+        // the ice shatters on release, for damage (keep him alive through the boss's blows)
+        g.events.clear();
+        for e in g.enemies.iter_mut() { e.dmg = 0.0; }
+        for _ in 0..70 { g.tick(1.0 / 30.0); }
+        let sh = g.events.chunks(EVENT_STRIDE).filter(|c| c[0] == EV_SHATTER).count();
+        assert_eq!(sh, g.enemies.len(), "every block shatters as it lets go");
+        assert!(!hits_of(&g, 9.0).is_empty(), "shatter damage");
+        assert!(g.enemies.iter().all(|e| e.frozen == 0.0));
+        // just-thawed foes resist fresh ice for a moment
+        g.gcd = 0.0; g.mana = g.max_mana();
+        assert!(g.cast(3));
+        assert!(g.enemies.iter().filter(|e| !e.boss).all(|e| e.frozen == 0.0), "thaw grace");
+    }
+
+    #[test]
+    fn mana_upgrades_only_for_the_sorcerer_and_persist() {
+        let mut g = Game::new(8.0);
+        g.debug_set_wave(100);
+        g.debug_set_souls(1e9);
+        let ui: serde_json::Value = serde_json::from_str(&g.ui(1)).unwrap();
+        let ups = ui["ups"].as_array().unwrap();
+        assert_eq!(ups.len(), N_UP);
+        assert_eq!(ups[UP_MANAPOOL]["only"], "sorcerer");
+        assert_eq!(ups[UP_MANAREGEN]["only"], "sorcerer");
+        assert_eq!(ups[0]["only"], "");
+        assert!(g.set_char(CH_SORC));
+        let m0 = g.max_mana();
+        let r0 = g.mana_per_strike();
+        assert!(g.buy(UP_MANAPOOL as u32, 5) == 5 && g.buy(UP_MANAREGEN as u32, 5) == 5);
+        assert!((g.max_mana() - m0 * 1.6).abs() < 1e-9);
+        assert!((g.mana_per_strike() - r0 * 1.6).abs() < 1e-9);
+        assert!(g.set_char(CH_ASURA) && g.set_char(CH_SORC));
+        assert_eq!(g.s.up[UP_MANAPOOL], 5, "levels persist across switching");
+        // the mana beads in the shrine show once he is unlocked
+        let mut h = Game::new(9.0);
+        let ui: serde_json::Value = serde_json::from_str(&h.ui(1)).unwrap();
+        assert_eq!(ui["shop"][SHOP_MANAPOOL]["shown"], false);
+        assert_eq!(ui["shop"][SHOP_ABILITY]["shown"], true);
+        h.debug_set_wave(100);
+        let ui: serde_json::Value = serde_json::from_str(&h.ui(1)).unwrap();
+        assert_eq!(ui["shop"][SHOP_MANAPOOL]["shown"], true);
+        h.s.beads = 1e6;
+        assert!(h.buy_shop(SHOP_MANAPOOL as u32) && h.buy_shop(SHOP_MANAREGEN as u32));
+        assert!((h.max_mana() - 115.0).abs() < 1e-9 && (h.mana_per_strike() - 6.9).abs() < 1e-9);
+    }
+
+    #[test]
+    fn ability_power_strengthens_every_character() {
+        // measure one ability hit per character with and without Ability Power
+        fn wrath_hit(ap: u32, ch: u32) -> f64 {
+            let mut g = Game::new(21.0);
+            g.debug_set_wave(100);
+            assert!(g.set_char(ch));
+            g.s.shop[SHOP_ABILITY] = ap;
+            g.enemies.clear(); g.to_spawn = 0; g.boss_pending = false;
+            g.spawn(false);
+            g.enemies[0].x = 0.2; g.enemies[0].y = 0.15; g.enemies[0].hp = 1e15; g.enemies[0].max_hp = 1e15;
+            g.mana = g.max_mana();
+            g.events.clear();
+            assert!(g.cast(if ch == CH_SORC { 1 } else { 0 }));
+            let hits: Vec<f64> = g.events.chunks(EVENT_STRIDE).filter(|c| c[0] == EV_HIT && c[4] == 0.0).map(|c| c[3]).collect();
+            assert!(!hits.is_empty());
+            hits[0]
+        }
+        for ch in [CH_ASURA, CH_DAEVA, CH_SORC] {
+            let a = wrath_hit(0, ch);
+            let b = wrath_hit(5, ch);
+            let ratio = b / a;
+            // same seed -> same variance roll; +10% per level
+            assert!((ratio - 1.5).abs() < 0.12, "char {} ability power ratio {}", ch, ratio);
+        }
+        // heals scale too (Blood Beads)
+        let mut g = Game::new(2.0);
+        g.debug_set_wave(30);
+        g.s.shop[SHOP_ABILITY] = 10;
+        g.hp = 1.0;
+        let mh = g.max_hp();
+        assert!(g.cast(2));
+        assert!(g.hp >= mh * 0.99, "beads heal scaled (capped at max)");
+    }
+
     #[test]
     fn balance_report() {
         let mut g = Game::new(3.0);
@@ -1691,10 +2341,10 @@ mod balance {
     #[test]
     #[ignore]
     fn balance_compare() {
-        for ch in 0..2u32 {
+        for ch in 0..3u32 {
             for &(start, secs) in &[(1u32, 1800.0), (50, 1800.0)] {
                 let mut g = Game::new(7.0);
-                g.debug_set_wave(50);
+                g.debug_set_wave(100);
                 g.set_char(ch);
                 g.s.wave = start; g.s.max_wave = start; g.start_wave();
                 if start == 50 { g.s.souls = 5e7; }

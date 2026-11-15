@@ -15,8 +15,8 @@ function loadImg(src) {
 
 export async function loadArt() {
   const meta = await (await fetch(BASE + 'atlas.json')).json();
-  const [asura, foes, fx, daeva] = await Promise.all([meta.asura, meta.foes, meta.fx, meta.daeva].map((m) => (m ? loadImg(BASE + m.file) : null)));
-  return { meta, img: { asura, foes, fx, daeva } };
+  const [asura, foes, fx, daeva, sorcerer] = await Promise.all([meta.asura, meta.foes, meta.fx, meta.daeva, meta.sorcerer].map((m) => (m ? loadImg(BASE + m.file) : null)));
+  return { meta, img: { asura, foes, fx, daeva, sorcerer } };
 }
 
 // high quality downscale: halve step by step, then a final resample
@@ -64,6 +64,12 @@ export function redOf(fr) {
 export const BLUE = '#2f6bff';
 export function blueOf(fr) {
   return fr.blue || (fr.blue = tinted(fr.c, 'rgba(38,92,224,1)', 'source-in'));
+}
+
+// the Sorcerer's accent: a deep violet ink
+export const PURPLE = '#7a3fd0';
+export function purpleOf(fr) {
+  return fr.purple || (fr.purple = tinted(fr.c, 'rgba(122,63,208,1)', 'source-in'));
 }
 
 // Unwrap the painted enso (a ring) into a straight dry-brush strip, so a trail

@@ -308,9 +308,11 @@ export function createAsura(opts = {}) {
   }
   // Wrath Burst: returns the delay (s) until the slam lands, so the renderer
   // can hold the shockwave/damage numbers for that beat.
-  function castSlam() {
-    const M = P.moves.slam, D = S.reduced ? 0.6 : M.base;
-    start('slam', D, now, face * 0.1, 0.0001);
+  function castSlam() { return castMove('slam'); }
+  // any move played as an ability cast (the Sorcerer's spell gestures)
+  function castMove(name) {
+    const M = P.moves[name] || P.moves.slam, D = S.reduced ? Math.min(0.6, M.base) : M.base;
+    start(P.moves[name] ? name : 'slam', D, now, face * 0.1, 0.0001);
     cur.locked = true; cur.hitDone = true;
     lastImpact = cur.impactT;
     return M.imp * D;
@@ -502,5 +504,5 @@ export function createAsura(opts = {}) {
     start(name, D || M.base, now, tx, ty);
     if (name === 'slam') cur.locked = true;
   }
-  return { update, draw, onAttack, onCrit, castSlam, debugPlay, get now() { return now; }, get busy() { return !!cur; }, get pose() { return lastSt; }, stats, MOVES: P.moves };
+  return { update, draw, onAttack, onCrit, castSlam, castMove, debugPlay, get face() { return face; }, get now() { return now; }, get busy() { return !!cur; }, get pose() { return lastSt; }, stats, MOVES: P.moves };
 }

@@ -180,6 +180,65 @@ export const VOICES = {
     VOICES.beads(ctx, out, t + 0.1, { blue: true });
     return 1.6;
   },
+  // ---- the Sorcerer: noise and soft sub only (low-Q filters, no ringing partials, never the punch clip)
+  burst(ctx, out, t, o = {}) { // a close burst of energy from the hands: a soft concussive "fwump"
+    const k = o.crit ? 1.35 : 1, p = R(0.9, 1.1);
+    nz(ctx, out, t, 0.11 * k, 'lowpass', 1500 * p, 0.7, 0.003, 0.8);
+    nz(ctx, out, t, 0.05, 'bandpass', 700 * p, 0.6, 0.001, 0.35);
+    thud(ctx, out, t, 150 * p, 55, 0.13 * k, 0.55 * k);
+    return 0.2 * k;
+  },
+  burstCrit(ctx, out, t) { VOICES.burst(ctx, out, t, { crit: true }); thud(ctx, out, t, 110, 38, 0.26, 0.6); nz(ctx, out, t + 0.01, 0.2, 'lowpass', 900, 0.7, 0.01, 0.4, 250); return 0.32; },
+  splash(ctx, out, t) { nz(ctx, out, t, 0.06, 'lowpass', 1100, 0.7, 0.002, 0.5); return 0.08; },
+  frost(ctx, out, t) { // ice damage: a dry crackle of grains
+    for (let i = 0; i < 4; i++) nz(ctx, out, t + Math.random() * 0.06, R(0.008, 0.018), 'highpass', R(3000, 6000), 0.5, 0.0005, R(0.12, 0.25));
+    return 0.1;
+  },
+  freeze(ctx, out, t) { // water locking into ice: a breathy rising hiss and crackles
+    nz(ctx, out, t, 0.3, 'highpass', 1200, 0.5, 0.04, 0.3, 4500);
+    for (let i = 0; i < 6; i++) nz(ctx, out, t + 0.05 + Math.random() * 0.25, R(0.006, 0.014), 'highpass', R(3500, 7000), 0.5, 0.0005, R(0.15, 0.3));
+    return 0.4;
+  },
+  shatter(ctx, out, t) { // the ice block bursts: broadband crack, falling grains, a dull thump
+    nz(ctx, out, t, 0.06, 'highpass', 1800, 0.5, 0.0005, 0.8);
+    thud(ctx, out, t, 120, 50, 0.12, 0.5);
+    for (let i = 0; i < 12; i++) nz(ctx, out, t + 0.02 + Math.random() * 0.35, R(0.01, 0.03), 'bandpass', R(2500, 6500), 0.8, 0.0005, R(0.1, 0.28));
+    return 0.45;
+  },
+  // Sorcerer spells: filtered noise and sine subs only, low Q, no tonal ring
+  bolts(ctx, out, t) { // three arcane orbs: a soft rising rush each, then a muffled thump as they land
+    for (let k = 0; k < 3; k++) {
+      const s = t + k * 0.08;
+      nz(ctx, out, s, 0.3, 'lowpass', 500, 0.7, 0.04, 0.35, 1800);
+      thud(ctx, out, s + 0.32, 150, 55, 0.14, 0.55);
+      nz(ctx, out, s + 0.32, 0.08, 'lowpass', 1400, 0.6, 0.002, 0.35);
+    }
+    return 0.75;
+  },
+  flame(ctx, out, t) { // a wave of fire rolls out: an opening roar, a low rumble, crackling embers
+    thud(ctx, out, t, 85, 34, 0.45, 0.7);
+    nz(ctx, out, t, 0.95, 'lowpass', 420, 0.6, 0.06, 0.75, 2400);
+    nz(ctx, out, t, 1.1, 'lowpass', 170, 0.7, 0.08, 0.5);
+    for (let i = 0; i < 16; i++) nz(ctx, out, t + 0.1 + Math.random() * 0.9, R(0.006, 0.02), 'bandpass', R(1200, 2600), 0.6, 0.0005, R(0.12, 0.3));
+    return 1.2;
+  },
+  chain(ctx, out, t) { // lightning leaping foe to foe: a dry crack per hop over a rolling rumble
+    for (let k = 0; k < 5; k++) {
+      const s = t + k * 0.07, g = 0.7 * Math.pow(0.78, k);
+      nz(ctx, out, s, 0.035, 'highpass', 1800, 0.5, 0.0005, g);
+      nz(ctx, out, s, 0.09, 'lowpass', 1600, 0.6, 0.001, g * 0.6);
+    }
+    thud(ctx, out, t + 0.02, 90, 36, 0.4, 0.55);
+    nz(ctx, out, t + 0.05, 0.7, 'lowpass', 220, 0.7, 0.05, 0.45);
+    return 0.8;
+  },
+  hell(ctx, out, t) { // the whole field locks in ice: a deep boom, a rush of cold air, the ice taking hold
+    thud(ctx, out, t, 80, 28, 0.7, 0.95);
+    nz(ctx, out, t, 0.8, 'lowpass', 280, 0.7, 0.02, 0.7, 2800);
+    nz(ctx, out, t + 0.08, 0.5, 'highpass', 1200, 0.5, 0.05, 0.3, 4500);
+    for (let i = 0; i < 20; i++) nz(ctx, out, t + 0.15 + Math.random() * 0.8, R(0.006, 0.016), 'highpass', R(3000, 7000), 0.5, 0.0005, R(0.1, 0.25));
+    return 1.2;
+  },
   heal(ctx, out, t) { tone(ctx, out, t, 0.18, 'sine', 880, 1320, 0.01, 0.08, 0.12); return 0.2; },
   // UI and flow
   buy(ctx, out, t) { tone(ctx, out, t, 0.08, 'triangle', 1320, null, 0.002, 0.12); tone(ctx, out, t + 0.05, 0.14, 'triangle', 1980, null, 0.002, 0.1); return 0.2; },
@@ -195,14 +254,15 @@ export const VOICES = {
 
 // per-sound throttles (min seconds between plays) and voice classes for the
 // concurrency cap, so a flurry of 30 hits/s stays a texture, not a wall
-const MIN = { whoosh: 0.09, hit: 0.045, grind: 0.06, crit: 0.08, death: 0.07, bossHit: 0.12, zap: 0.06, drop: 0.07, heal: 0.35, buy: 0.07, waveClear: 1.2 };
-const CLASS = { whoosh: 'hit', hit: 'hit', grind: 'hit', crit: 'hit', death: 'hit', bossHit: 'hit', zap: 'hit', drop: 'hit' };
+const MIN = { burst: 0.045, burstCrit: 0.08, splash: 0.06, frost: 0.07, freeze: 0.08, shatter: 0.06, whoosh: 0.09, hit: 0.045, grind: 0.06, crit: 0.08, death: 0.07, bossHit: 0.12, zap: 0.06, drop: 0.07, heal: 0.35, buy: 0.07, waveClear: 1.2 };
+const CLASS = { burst: 'hit', burstCrit: 'hit', splash: 'hit', frost: 'hit', freeze: 'hit', shatter: 'hit', whoosh: 'hit', hit: 'hit', grind: 'hit', crit: 'hit', death: 'hit', bossHit: 'hit', zap: 'hit', drop: 'hit' };
 const CAP = { hit: 6 };
 const SAMPLED = new Set(['hit', 'crit', 'bossHit']); // voices that play the punch recording when it is loaded
 // per-voice level trims (measured short-term loudness, balanced so hits sit low,
 // abilities and boss moments stand out, UI blips stay subtle)
 export const LEVEL = { whoosh: 1.2, hit: 0.75, grind: 0.75, crit: 0.63, death: 1.6, bossHit: 0.67, wrath: 0.67, storm: 1.7, zap: 1.0, drop: 1, beads: 1.5, sixarms: 0.8,
-  tide: 0.9, rain: 2.4, whirlpool: 2.3, lotus: 1.35, heal: 1.8, buy: 2.7, waveClear: 2.1, bossAppear: 0.7, bossDeath: 0.7, defeat: 0.8, unlock: 2.1 };
+  tide: 0.9, rain: 2.4, whirlpool: 2.3, lotus: 1.35, heal: 1.8, buy: 2.7, waveClear: 2.1, bossAppear: 0.7, bossDeath: 0.7, defeat: 0.8, unlock: 2.1,
+  burst: 1.0, burstCrit: 0.9, splash: 0.8, frost: 1.2, freeze: 1.4, shatter: 1.1, bolts: 1.2, flame: 0.9, chain: 1.1, hell: 1.0 };
 
 // skip codec padding / silence so the recorded punch lands on the frame it is triggered
 export function sampleStart(buf) {

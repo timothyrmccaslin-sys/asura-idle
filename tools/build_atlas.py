@@ -26,13 +26,19 @@ def key(path, report=None):
     if len(ys) and not os.path.basename(path).startswith('fx_'):
         y0, y1 = ys.min(), ys.max(); h = y1 - y0
         b = os.path.basename(path)
-        if b.startswith('a_') or b.startswith('d_') or b.split('_')[0] in ('e0', 'e1', 'e2', 'e3', 'e4', 'e7', 'e8', 'e11'):
+        if b.startswith('a_') or b.startswith('d_') or b.startswith('s_') or b.split('_')[0] in ('e0', 'e1', 'e2', 'e3', 'e4', 'e7', 'e8', 'e11'):
             # figures with no painted-white cloth/feathers (the Asura, ashigaru, ninja,
             # kappa, ronin, samurai, oni, oni warlord, orochi): paper pockets trapped between hair
             # strands, sash tails and motion swirls go everywhere (dense face/teeth stay)
             rgba = drop_paper(rgba, src)
         else:
             rgba = drop_paper(rgba, src, band=(y1 - 0.16 * h, y1 - 0.08 * h))
+    if os.path.basename(path).startswith('s_'):
+        # the Sorcerer's painted energy can run off the canvas: fade it out over the
+        # last 70 px so a burst never ends in a hard straight cut
+        hh, ww = rgba.shape[:2]; yy, xx = np.mgrid[0:hh, 0:ww]
+        edge = np.minimum(np.minimum(xx, ww - 1 - xx), np.minimum(yy, hh - 1 - yy)).astype(np.float32)
+        rgba = rgba.copy(); rgba[..., 3] = (rgba[..., 3] * np.clip(edge / 70.0, 0, 1)).astype(np.uint8)
     return Image.fromarray(rgba,'RGBA')
 
 def crop(img,pad=4):
@@ -48,6 +54,10 @@ def red_mask(img):
 def blue_mask(img):
     a=np.asarray(img).astype(np.int32); r,g,b,al=a[...,0],a[...,1],a[...,2],a[...,3]
     return (al>128)&(b>110)&(b>r*1.6)&(b>g*1.25)
+
+def purple_mask(img):
+    a=np.asarray(img).astype(np.int32); r,g,b,al=a[...,0],a[...,1],a[...,2],a[...,3]
+    return (al>128)&(b>90)&(b>g*1.45)&(r>g*1.15)
 
 def baseline(img):
     a=np.asarray(img)[...,3]>128
@@ -93,6 +103,34 @@ for p in sorted(glob.glob(SRC+'/d_*.jpg')):
     nx=float(np.median(xs[hi])) if hi.sum()>20 else tx
     sash=(tx,sy); beads=(nx,ny)
     add('D_'+name,c,sash[0],by,{'sash':sash,'beads':beads,'head':(beads[0]+4,beads[1]-(sash[1]-beads[1])*0.35)})
+
+# ---------------- Sorcerer poses: same pipeline, purple accents (sash below, beads above).
+# He is painted taller and the energy bursts widen the canvas, so the scale comes
+# from the idle figure's height (matched to the Asura idle) rather than the image.
+s_files=sorted(glob.glob(SRC+'/s_*.jpg'))
+if s_files:
+    a_idle=frames.get('A_idle')
+    ref_h=(baseline(a_idle['img'])-np.where(np.asarray(a_idle['img'])[...,3].max(axis=1)>128)[0].min()) if a_idle else None
+    ki=key(SRC+'/s_idle.jpg'); ci,_=crop(ki); ali=np.asarray(ci)[...,3]
+    idle_h=baseline(ci)-np.where(ali.max(axis=1)>128)[0].min()
+    S_S=(ref_h*1.04/idle_h) if ref_h else S_A
+    for p in s_files:
+        name=os.path.basename(p)[2:-4]
+        k=key(p); k=k.resize((round(k.width*S_S),round(k.height*S_S)),Image.LANCZOS)
+        c,_=crop(k)
+        pm=purple_mask(c); al=np.asarray(c)[...,3].astype(np.float32)/255
+        by=baseline(c); rows=np.where(al.max(axis=1)>0.5)[0]; top=rows.min(); hh=by-top
+        band=al[int(top+hh*0.40):int(top+hh*0.58)]*(al[int(top+hh*0.40):int(top+hh*0.58)]>0.8)
+        colw=band.sum(axis=0); cs=np.cumsum(colw); tx=float(np.searchsorted(cs,cs[-1]/2))
+        ys,xs=np.where(pm)
+        near=np.abs(xs-tx)<c.width*0.14
+        lo=(ys>top+hh*0.38)&(ys<top+hh*0.62)&near
+        hi=(ys>top+hh*0.12)&(ys<=top+hh*0.38)&near
+        sy=float(np.median(ys[lo])) if lo.sum()>30 else top+hh*0.5
+        ny=float(np.median(ys[hi])) if hi.sum()>20 else top+hh*0.3
+        nx=float(np.median(xs[hi])) if hi.sum()>20 else tx
+        sash=(tx,sy); beads=(nx,ny)
+        add('S_'+name,c,sash[0],by,{'sash':sash,'beads':beads,'head':(beads[0]+4,beads[1]-(sash[1]-beads[1])*0.35)})
 
 # ---------------- enemies & bosses: normalised height
 H={0:236,1:220,2:196,3:236,4:240,5:240,6:236,7:250,8:400,9:400,10:400,11:400,12:400}
@@ -144,11 +182,13 @@ ma,sa=pack([n for n in frames if n.startswith('A_')],'asura.webp')
 me,se=pack([n for n in frames if n.startswith('E')],'foes.webp')
 mf,sf=pack([n for n in frames if n.startswith('FX_')],'fx.webp',1024)
 md,sd=pack([n for n in frames if n.startswith('D_')],'daeva.webp')
+ms_,ss_=pack([n for n in frames if n.startswith('S_')],'sorcerer.webp') if s_files else ({},None)
 meta={'asura':{'file':'asura.webp','size':sa,'frames':ma},'daeva':{'file':'daeva.webp','size':sd,'frames':md},'foes':{'file':'foes.webp','size':se,'frames':me},'fx':{'file':'fx.webp','size':sf,'frames':mf}}
+if s_files: meta['sorcerer']={'file':'sorcerer.webp','size':ss_,'frames':ms_}
 json.dump(meta,open(OUT+'/atlas.json','w'),indent=1)
-for f in ('asura.webp','daeva.webp','foes.webp','fx.webp'): print(f,os.path.getsize(OUT+'/'+f)//1024,'KB', Image.open(OUT+'/'+f).size)
+for f in ('asura.webp','daeva.webp','foes.webp','fx.webp')+(('sorcerer.webp',) if s_files else ()): print(f,os.path.getsize(OUT+'/'+f)//1024,'KB', Image.open(OUT+'/'+f).size)
 # previews on dark + paper backgrounds to check for halos
-for f in ('asura.webp','daeva.webp','foes.webp'):
+for f in ('asura.webp','daeva.webp','foes.webp')+(('sorcerer.webp',) if s_files else ()):
     a=Image.open(OUT+'/'+f)
     for bg,nm in [((40,40,60,255),'dark'),((236,230,216,255),'paper')]:
         b=Image.new('RGBA',a.size,bg); b.alpha_composite(a); b.convert('RGB').save(os.path.join(SRC,'preview-%s-%s.jpg'%(f[:-5],nm)),quality=85)

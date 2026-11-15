@@ -9,7 +9,7 @@ import { createSfx } from './sfx.js';
 const SAVE_KEY = 'asura-idle-save-v1';
 const PREFS_KEY = 'asura-idle-prefs-v1';
 const AUTOSAVE_MS = 5000;
-const APP_VERSION = '3.5.4'; // keep in step with VERSION in sw.js
+const APP_VERSION = '3.6.0'; // keep in step with VERSION in sw.js
 
 const UPS = {
   damage:   { name: 'Wrath',        desc: 'Raw striking power. Doubles every 25 levels.', f: (v) => fmt(v) },
@@ -22,6 +22,9 @@ const UPS = {
   regen:    { name: 'Breath',       desc: 'Health restored per second.',               f: (v) => fmt(v) + '/s' },
   greed:    { name: 'Soul Hunger',  desc: 'Souls reaped from every kill.',             f: (v) => '×' + fmt(v) },
   siphon:   { name: 'Blood Rite',   desc: 'Heal for a share of damage dealt.',         f: (v) => (v * 100).toFixed(1) + '%' },
+  // Sorcerer only: listed while he fights, levels kept when switching
+  manapool:  { name: 'Mana Pool',   desc: 'Sorcerer: the most mana he can hold.',            f: (v) => Math.round(v) + '' },
+  manaregen: { name: 'Mana Regen',  desc: 'Sorcerer: mana each normal strike gives back.',   f: (v) => v.toFixed(1) },
 };
 const SHOP = {
   wrathMala:    { name: 'Mala of Wrath',  desc: '+50% damage per level.' },
@@ -31,6 +34,9 @@ const SHOP = {
   karmicLeap:   { name: 'Karmic Leap',    desc: 'Each new life starts 3 waves further (up to half your best).' },
   meditation:   { name: 'Meditation',     desc: '+10% offline souls and +1h offline cap per level.' },
   tempestHeart: { name: 'Tempest Heart',  desc: 'Ability cooldowns −6% per level.' },
+  deepWell:     { name: 'Deep Well',      desc: 'Sorcerer: +15% mana pool per level.' },
+  risingTide:   { name: 'Rising Tide',    desc: 'Sorcerer: +15% mana from each strike per level.' },
+  abilityPower: { name: 'Ability Power',  desc: '+10% strength of every ability, all characters (damage, heals, shields; Sorcerer freeze and paralysis last +3% longer, up to +75%).' },
 };
 // Characters (data-driven; the rules for each live in the Rust core's CHARS)
 const CHARS = {
@@ -52,6 +58,16 @@ const CHARS = {
       rain:      { name: 'Healing Rain',     glyph: '雨', sub: 'heal over time', desc: 'Blue rain heals her for 10s; falling droplets strike nearby foes.' },
       whirlpool: { name: 'Whirlpool',        glyph: '渦', sub: 'pull · grind', desc: 'A vortex opens in the thickest knot of foes, dragging them in and grinding them down.' },
       lotus:     { name: 'Blue Lotus Beads', glyph: '蓮', sub: 'shield · heal', desc: 'Blue beads orbit her: each hit heals, and they shield 60% of harm.' },
+    },
+  },
+  sorcerer: {
+    name: 'Sorcerer', title: 'Spellbinder', accent: '#7a3fd0', portrait: 'assets/chars/sorcerer.webp', mana: true,
+    lore: 'A violet-eyed mystic who strikes with bursts of energy from his hands and answers the horde with arcane fire, lightning and ice. His spells run on mana, not cooldowns.',
+    abs: {
+      bolts: { name: 'Arcane Bolts',    glyph: '秘', sub: '3 furthest foes', desc: 'Three arcane bolts seek out the three furthest foes on the field, each striking for 300% damage.' },
+      flame: { name: 'Flame Wave',      glyph: '炎', sub: 'push all back', desc: 'A wave of flame rolls out and drives every foe, bosses too, back to the edge of the field. It barely singes them (30% damage).' },
+      chain: { name: 'Chain Lightning', glyph: '雷', sub: '5 foes · paralyze', desc: 'Lightning strikes the nearest foe for 120% damage, then leaps to the next nearest foe up to 5 times, 40% weaker each jump. Every foe it hits is paralyzed for 0.5s.' },
+      hell:  { name: 'Frozen Hell',     glyph: '獄', sub: 'freeze all · 3s', desc: 'Every foe on the field is locked in ice for 3s (bosses 1.5s). Frozen foes cannot move or strike and take +20% damage. The ice shatters for 200% damage as it breaks, and thawed foes resist fresh ice for 1.5s.' },
     },
   },
 };
@@ -117,7 +133,7 @@ function buildUI() {
     c.innerHTML = `<div class="c-name">${d.name}<span class="c-lvl"></span></div><div class="c-desc">${d.desc}</div><div class="c-val"></div>
       <button class="buy" data-key="${key}"><span class="b-n"></span><span class="b-cost"></span></button>`;
     list.appendChild(c);
-    upEls[key] = { lvl: c.querySelector('.c-lvl'), val: c.querySelector('.c-val'), btn: c.querySelector('.buy'), n: c.querySelector('.b-n'), cost: c.querySelector('.b-cost') };
+    upEls[key] = { card: c, lvl: c.querySelector('.c-lvl'), val: c.querySelector('.c-val'), btn: c.querySelector('.buy'), n: c.querySelector('.b-n'), cost: c.querySelector('.b-cost') };
   }
   const shop = $('shop-list');
   Object.entries(SHOP).forEach(([key, d], i) => {
@@ -126,7 +142,7 @@ function buildUI() {
       <button class="buy"><span class="b-n">beads</span><span class="b-cost"></span></button>`;
     c.querySelector('.buy').addEventListener('click', () => { if (game.buy_shop(i)) { sfx.play('buy'); refresh(true); save(); } });
     shop.appendChild(c);
-    shopEls[key] = { lvl: c.querySelector('.c-lvl'), btn: c.querySelector('.buy'), cost: c.querySelector('.b-cost') };
+    shopEls[key] = { card: c, lvl: c.querySelector('.c-lvl'), btn: c.querySelector('.buy'), cost: c.querySelector('.b-cost') };
   });
   buildChars();
 
@@ -237,12 +253,17 @@ function buildAbilities(key) {
   for (const k of Object.keys(abEls)) delete abEls[k];
   Object.entries(ABS).forEach(([k, d], i) => {
     const b = document.createElement('button'); b.className = 'ab locked'; b.dataset.key = k;
-    b.innerHTML = `<span class="cd"></span><span class="ab-glyph">${d.glyph}</span><span class="ab-name">${d.name}</span><span class="ab-sub"></span>`;
-    b.addEventListener('click', () => { if (game.cast(i)) refresh(true); });
+    b.innerHTML = `<span class="cd"></span><span class="ab-glyph">${d.glyph}</span><span class="ab-name">${d.name}</span><span class="ab-sub"></span>${CHARS[key] && CHARS[key].mana ? '<span class="ab-cost"></span>' : ''}`;
+    b.addEventListener('click', () => {
+      if (game.cast(i)) refresh(true);
+      else if (ui && ui.char === 'sorcerer' && ui.abs[i] && ui.abs[i].unlocked && ui.abs[i].afford) toast('No foes on the field.');
+    });
     abs.appendChild(b);
-    abEls[k] = { b, cd: b.querySelector('.cd'), sub: b.querySelector('.ab-sub') };
+    abEls[k] = { b, cd: b.querySelector('.cd'), sub: b.querySelector('.ab-sub'), cost: b.querySelector('.ab-cost') };
   });
   document.body.classList.toggle('daeva', key === 'daeva');
+  document.body.classList.toggle('sorcerer', key === 'sorcerer');
+  $('mana').hidden = !(CHARS[key] && CHARS[key].mana);
   document.body.dataset.char = key;
 }
 const charEls = {};
@@ -276,7 +297,7 @@ function refreshChars() {
     el.el.classList.toggle('selected', sel); el.el.classList.toggle('locked', !c.unlocked);
     el.btn.disabled = !c.unlocked || sel;
     el.btn.textContent = !c.unlocked ? `Locked · reach wave ${c.unlock}` : sel ? 'Fighting' : 'Choose ' + CHARS[c.key].name;
-    c.abs.forEach((a, i) => { if (el.us[i]) el.us[i].textContent = `(wave ${a.unlock}, ${Math.round(a.cd)}s cd)`; });
+    c.abs.forEach((a, i) => { if (el.us[i]) el.us[i].textContent = a.cost > 0 ? `(wave ${a.unlock}, ${Math.round(a.cost)} mana)` : `(wave ${a.unlock}, ${Math.round(a.cd)}s cd)`; });
   }
 }
 
@@ -299,6 +320,9 @@ function refresh(force) {
   if (tab === 'up' || force) {
     for (const u of ui.ups) {
       const el = upEls[u.key], d = UPS[u.key];
+      if (!el) continue;
+      el.card.hidden = !!u.only && u.only !== ui.char;
+      el.card.classList.toggle('only', !!u.only);
       el.lvl.textContent = 'Lv ' + u.lvl + (u.max ? ' / ' + u.max : '');
       el.val.innerHTML = u.maxed ? d.f(u.now) + ' <span class="arrow">· mastered</span>' : `${d.f(u.now)} <span class="arrow">→</span> ${d.f(u.next)}`;
       el.btn.disabled = !u.afford;
@@ -317,6 +341,8 @@ function refresh(force) {
       : `Reach wave 30 to be reborn (best this life: ${ui.maxWave}). Each lifetime bead adds +4% damage and +2% souls, forever.`;
     for (const s of ui.shop) {
       const el = shopEls[s.key];
+      if (!el) continue;
+      el.card.hidden = s.shown === false;
       el.lvl.textContent = 'Lv ' + s.lvl + (s.max ? ' / ' + s.max : '');
       el.btn.disabled = !s.afford;
       el.cost.textContent = s.maxed ? 'MAX' : fmt(s.cost);
@@ -329,6 +355,8 @@ function refresh(force) {
       ['Crit chance', Math.round(ui.crit * 100) + '%'], ['Crit damage', '×' + ui.critMult.toFixed(2)], ['Foes per swing', ui.targets],
       ['Health', fmt(ui.hp) + ' / ' + fmt(ui.maxHp)], ['Regen', fmt(ui.regen) + '/s'], ['Soul multiplier', '×' + fmt(ui.soulMult)],
       ['Lifesteal', (ui.siphon * 100).toFixed(1) + '%'], ['Bead damage bonus', '×' + fmt(ui.beadDmg)],
+      ...(ui.char === 'sorcerer' ? [['Mana', Math.floor(ui.mana) + ' / ' + Math.round(ui.maxMana)], ['Mana per strike', ui.manaGain.toFixed(1)]] : []),
+      ['Ability power', '×' + ui.abilityPower.toFixed(2)],
       ['Offline', Math.round(ui.offlineEff * 100) + '% for up to ' + Math.round(ui.offlineCap / 3600) + 'h'],
       ['Best wave ever', ui.bestWave], ['Foes slain', fmt(ui.kills)], ['Souls reaped', fmt(ui.totalSouls)],
       ['Rebirths', ui.rebirths], ['Time fighting', dur(ui.playTime)],
@@ -348,6 +376,14 @@ function updateAbilities() {
     el.b.classList.toggle('active', a.active > 0);
     el.cd.style.setProperty('--p', a.unlocked && a.cd > 0 ? (a.cd / a.cdMax) * 100 + '%' : '0%');
     el.sub.textContent = !a.unlocked ? 'wave ' + a.unlock : a.active > 0 ? Math.ceil(a.active) + 's' : a.cd > 0 ? Math.ceil(a.cd) + 's' : ABS[a.key].sub;
+    if (a.cost > 0) { // mana spells: no cooldown, greyed while he cannot pay
+      const poor = a.unlocked && !a.afford;
+      el.b.classList.toggle('poor', poor);
+      el.b.classList.toggle('ready', a.unlocked && a.afford && a.gcd <= 0 && a.active <= 0);
+      el.cd.style.setProperty('--p', a.unlocked && a.gcd > 0 ? Math.min(100, (a.gcd / 0.4) * 100) + '%' : '0%');
+      if (el.cost) el.cost.textContent = Math.round(a.cost);
+      el.b.title = `${ABS[a.key].name}: ${Math.round(a.cost)} mana`;
+    }
   });
 }
 
@@ -367,7 +403,8 @@ function onEvents(ev) {
       banner('I am the storm', '', false);
     } else if (t === 14) { // a character unlocked
       const c = ui && ui.chars ? ui.chars.find((x) => x.id === a) : null, d = c && CHARS[c.key];
-      if (d) { banner(d.name + ' awakens', 'choose her in Characters', true); toast(`${d.name} unlocked. Open the Characters tab to fight as her.`); }
+      const pr = c && c.key === 'daeva' ? 'her' : 'him';
+      if (d) { banner(d.name + ' awakens', `choose ${pr} in Characters`, true); toast(`${d.name} unlocked. Open the Characters tab to fight as ${pr}.`); }
       refresh(true);
     } else if (t === 15) {
       refresh(true);
@@ -376,7 +413,7 @@ function onEvents(ev) {
 }
 
 // ------------------------------------------------------------ sound effects
-const CAST_SFX = [['wrath', 'storm', 'beads', 'sixarms'], ['tide', 'rain', 'whirlpool', 'lotus']];
+const CAST_SFX = [['wrath', 'storm', 'beads', 'sixarms'], ['tide', 'rain', 'whirlpool', 'lotus'], ['bolts', 'flame', 'chain', 'hell']];
 function nearBoss(x, y) {
   const en = game.enemies();
   for (let o = 0; o < en.length; o += 11) if (en[o + 9] > 0 && Math.abs(en[o + 2] - x) < 0.12 && Math.abs(en[o + 3] - y) < 0.12) return true;
@@ -395,7 +432,12 @@ function sounds(ev) {
     const t = ev[i], x = ev[i + 1], y = ev[i + 2], a = ev[i + 3], b = ev[i + 4], c = ev[i + 5];
     switch (t) {
       case 1: // hit: kind c 0 basic, 1 cleave, 2 Wrath, 3 rain drop, 4 whirlpool grind, 5 lotus bead
-        if (c === 3) sfx.play('drop');
+        if (c === 6) sfx.play(b ? 'burstCrit' : 'burst'); // Sorcerer hand burst (never the punch clip)
+        else if (c === 7) sfx.play('splash', null, 0.5);
+        else if (c === 8) sfx.play('frost', null, 0.5);
+        else if (c === 9) { /* the shatter event plays it */ }
+        else if (c >= 10) { /* Sorcerer spells: their cast sound covers the hits */ }
+        else if (c === 3) sfx.play('drop');
         else if (c === 4 || c === 5) sfx.play('grind', null, 0.45);
         else if (b) sfx.play('crit', { v: strikeKind() });
         else if (c !== 2) { if (nearBoss(x, y)) sfx.play('bossHit'); else sfx.play('hit', { v: strikeKind() }); }
@@ -409,6 +451,8 @@ function sounds(ev) {
       case 10: sfx.play('heal'); break;
       case 11: { const n = (CAST_SFX[b | 0] || CAST_SFX[0])[a | 0]; if (n) sfx.play(n); break; }
       case 14: sfx.play('unlock'); break;
+      case 17: sfx.play('freeze', null, b ? 0.9 : 0.6); break;
+      case 21: sfx.play('shatter'); break;
     }
   }
 }
@@ -430,6 +474,10 @@ function frame(now) {
   frame.prev = now;
   $('hp-fill').style.width = (f[0] * 100).toFixed(1) + '%';
   $('hp-text').textContent = fmt(f[13]) + ' / ' + fmt(f[14]);
+  if (f[17] === 2 && f.length > 26) {
+    $('mana-fill').style.width = (f[24] * 100).toFixed(1) + '%';
+    $('mana-text').textContent = Math.floor(f[25]) + ' / ' + Math.round(f[26]);
+  }
   $('wave-fill').style.width = (f[6] ? (f[5] / f[6]) * 100 : 0).toFixed(1) + '%';
   refresh(false);
   if (now - lastSaveT > AUTOSAVE_MS) { save(); lastSaveT = now; }

@@ -90,6 +90,9 @@ export function createFoeRig({ frame, flashOf }) {
       let s = st.get(id);
       if (!s) { s = { x, y, ph: Math.random() * TAU, v: 0, hit: 0, lf: 0, melee: -1, seed: Math.random() * TAU, struck: -1, boss, kind, kb: 1 }; st.set(id, s); }
       s.seen = true;
+      // frozen by the Sorcerer (negative slow): the whole rig holds its pose
+      s.frozen = en[o + 10] < 0;
+      if (s.frozen) { s.tOff = (s.tOff || 0) + dt; s.x = x; s.y = y; s.lf = flash; s.hit = Math.max(0, s.hit - dt / 0.26); continue; }
       const d = Math.hypot(x, y), mv = Math.hypot(x - s.x, y - s.y);
       const v = dt > 0 ? mv / dt : 0;
       s.v += (Math.min(v, 1.5) - s.v) * Math.min(1, dt * 8);
@@ -138,7 +141,7 @@ export function createFoeRig({ frame, flashOf }) {
       ctx.drawImage(fl ? flashOf(R.fr) : R.fr.c, -ax, -ay);
       ctx.restore(); return R;
     }
-    const t = now + s.seed;
+    const t = now + s.seed - (s.tOff || 0);
     const run = Math.min(1, s.v / 0.12);           // 0 standing .. 1 full stride
     const a = attack(s), heavy = spec.heavy || s.boss;
     const hit = ease(s.hit) * (s.kb || 1);

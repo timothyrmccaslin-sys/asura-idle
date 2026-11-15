@@ -10,6 +10,14 @@ export class Game {
         wasm.__wbg_game_free(ptr, 0);
     }
     /**
+     * Ability Power (rebirth): +10% damage and healing from every character's abilities
+     * @returns {number}
+     */
+    ability_power() {
+        const ret = wasm.game_ability_power(this.__wbg_ptr);
+        return ret;
+    }
+    /**
      * Grant progress for `seconds` away. Returns a JSON summary.
      * @param {number} seconds
      * @returns {string}
@@ -139,6 +147,7 @@ export class Game {
     }
     /**
      * Flat enemy buffer: [id, kind, x, y, hpFrac, size, age, flash, phase, boss, slow] * n
+     * (slow in (-100, 0) means frozen for -slow seconds; slow <= -100 means paralyzed)
      * @returns {Float32Array}
      */
     enemies() {
@@ -215,10 +224,26 @@ export class Game {
         return ret !== 0;
     }
     /**
+     * mana refilled by each normal strike (once per swing, however many foes it hits)
+     * @returns {number}
+     */
+    mana_per_strike() {
+        const ret = wasm.game_mana_per_strike(this.__wbg_ptr);
+        return ret;
+    }
+    /**
      * @returns {number}
      */
     max_hp() {
         const ret = wasm.game_max_hp(this.__wbg_ptr);
+        return ret;
+    }
+    /**
+     * Sorcerer mana pool: 100, +12% per Mana Pool level, +15% per Deep Well bead level
+     * @returns {number}
+     */
+    max_mana() {
+        const ret = wasm.game_max_mana(this.__wbg_ptr);
         return ret;
     }
     /**

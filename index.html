@@ -44,6 +44,7 @@
           <button id="auto-btn" class="chip on" aria-pressed="true" title="Advance to the next wave automatically">Auto ▸</button>
         </div>
         <div class="hud-bottom">
+          <div class="mana" id="mana" hidden aria-label="Mana"><div id="mana-fill"></div><span id="mana-text">0 / 100</span></div>
           <div class="hp"><div id="hp-fill"></div><span id="hp-text">100 / 100</span></div>
         </div>
         <div id="banner" class="banner" hidden></div>
@@ -89,7 +90,7 @@
 
     <div class="tab-body" data-body="chars" hidden>
       <div class="panel-label inline">— Characters —</div>
-      <p class="flav">Souls, waves, upgrades and beads are shared. Each champion brings their own fighting style and four abilities. Switching resets ability cooldowns.</p>
+      <p class="flav">Souls, waves, upgrades and beads are shared. Each champion brings their own fighting style and four abilities. Switching resets ability cooldowns. The Sorcerer casts with mana instead of cooldowns.</p>
       <div id="char-list" class="char-list"></div>
     </div>
 
