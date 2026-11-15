@@ -3,6 +3,7 @@
 // fist, palm, kick, crit and boss strike plays dry.
 // Each voice is a function (ctx, out, t, o) so the same code also renders
 // offline (OfflineAudioContext) for previews.
+import { audio } from './audio.js';
 
 const noiseCache = new WeakMap();
 function noise(ctx) {
@@ -211,27 +212,20 @@ export function sampleStart(buf) {
 }
 
 export function createSfx({ enabled = true, volume = 0.6 } = {}) {
-  let ctx = null, master = null, comp = null, on = enabled, vol = volume, hidden = false;
+  let ctx = null, master = null, comp = null, on = enabled, vol = volume;
   const last = {}, live = {}; let lastStrike = -9;
+  let punch = null; // { buf, offset } decoded from assets/audio/punch.wav
   const level = () => (on ? vol * vol * 1.1 : 0); // hits sit just under the music, ability hits level with it
-  function unlock() {
-    if (ctx) { if (on && !hidden && ctx.state !== 'running') ctx.resume().catch(() => {}); return; }
-    const AC = window.AudioContext || window.webkitAudioContext; if (!AC) return;
-    ctx = new AC();
+  // shared, iOS-safe context (audio.js); rebuilt if iOS forces a new context
+  audio.want('sfx', on);
+  audio.onContext((c) => {
+    ctx = c;
     comp = ctx.createDynamicsCompressor(); comp.threshold.value = -18; comp.ratio.value = 4; comp.attack.value = 0.003; comp.release.value = 0.15;
     master = ctx.createGain(); master.gain.value = level();
     comp.connect(master); master.connect(ctx.destination);
-    if (!on) ctx.suspend().catch(() => {});
-    loadPunch();
-  }
-  for (const ev of ['pointerdown', 'keydown', 'touchend']) window.addEventListener(ev, unlock, { capture: true, passive: true });
-  document.addEventListener('visibilitychange', () => {
-    hidden = document.visibilityState === 'hidden';
-    if (!ctx) return;
-    if (hidden) ctx.suspend().catch(() => {}); else if (on) ctx.resume().catch(() => {});
+    if (!punch) loadPunch();
   });
-  const stats = { played: 0, dropped: 0, punch: 'pending' };
-  let punch = null; // { buf, offset } decoded from assets/audio/punch.wav
+  const stats = { played: 0, dropped: 0, punch: 'pending' }; // { buf, offset } decoded from assets/audio/punch.wav
   async function loadPunch() {
     try {
       const ab = await (await fetch('assets/audio/punch.wav')).arrayBuffer();
@@ -240,7 +234,7 @@ export function createSfx({ enabled = true, volume = 0.6 } = {}) {
     } catch (e) { stats.punch = 'synth'; console.warn('punch sample unavailable, using synthesised hit', e); }
   }
   function play(name, o, gain = 1) {
-    if (!ctx || !on || hidden || ctx.state !== 'running') return false;
+    if (!ctx || !on || audio.hidden || ctx.state !== 'running') return false;
     const v = VOICES[name]; if (!v) return false;
     const now = ctx.currentTime;
     if (MIN[name] && now - (last[name] ?? -9) < MIN[name]) { stats.dropped++; return false; }
@@ -260,8 +254,8 @@ export function createSfx({ enabled = true, volume = 0.6 } = {}) {
   }
   return {
     play,
-    setEnabled(v) { on = !!v; if (!ctx) return; if (on) ctx.resume().catch(() => {}); master.gain.setTargetAtTime(level(), ctx.currentTime, 0.03); if (!on) setTimeout(() => { if (!on) ctx.suspend().catch(() => {}); }, 200); },
+    setEnabled(v) { on = !!v; audio.want('sfx', on); if (!ctx) return; master.gain.setTargetAtTime(level(), ctx.currentTime, 0.03); },
     setVolume(v) { vol = Math.max(0, Math.min(1, v)); if (master) master.gain.setTargetAtTime(level(), ctx.currentTime, 0.03); },
-    get state() { return { ctx: ctx ? ctx.state : 'locked', on, vol, ...stats }; },
+    get state() { return { ctx: ctx ? ctx.state : 'locked', on, vol, session: audio.state.session, ...stats }; },
   };
 }

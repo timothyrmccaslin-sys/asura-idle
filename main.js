@@ -9,7 +9,7 @@ import { createSfx } from './sfx.js';
 const SAVE_KEY = 'asura-idle-save-v1';
 const PREFS_KEY = 'asura-idle-prefs-v1';
 const AUTOSAVE_MS = 5000;
-const APP_VERSION = '3.5.3'; // keep in step with VERSION in sw.js
+const APP_VERSION = '3.5.4'; // keep in step with VERSION in sw.js
 
 const UPS = {
   damage:   { name: 'Wrath',        desc: 'Raw striking power. Doubles every 25 levels.', f: (v) => fmt(v) },
@@ -503,6 +503,18 @@ function setupPWA() {
     document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') reg.update().catch(() => {}); });
   }).catch((e) => console.warn('service worker registration failed', e));
 }
+
+// exact app height for the layout (iPad standalone, rotation, Safari toolbars):
+// innerHeight follows the real visible area where 100vh/100dvh can lag a rotation
+function fitHeight() {
+  const vv = window.visualViewport, h = vv && vv.scale <= 1.01 ? Math.min(vv.height, window.innerHeight) : window.innerHeight;
+  if (h > 200) document.documentElement.style.setProperty('--app-h', Math.round(h) + 'px');
+}
+fitHeight();
+window.addEventListener('resize', fitHeight);
+window.addEventListener('orientationchange', () => { fitHeight(); setTimeout(fitHeight, 250); setTimeout(fitHeight, 700); });
+if (window.visualViewport) window.visualViewport.addEventListener('resize', fitHeight);
+window.addEventListener('pageshow', fitHeight);
 
 async function main() {
   try {

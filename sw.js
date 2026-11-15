@@ -1,12 +1,12 @@
 // Asura service worker — precaches the app shell so the game runs fully offline.
 // Bump VERSION on every release; the page shows "New version, tap to refresh".
 // Saves live in localStorage, which this worker never touches.
-const VERSION = 'asura-3.5.3';
+const VERSION = 'asura-3.5.4';
 // later stage themes are fetched lazily by the game and cached on first use; they are
 // also warmed in the background after activation so the whole game works offline
 const THEMES_LATER = ['tengu', 'shogun', 'orochi', 'onryo'].flatMap((t) => [`./assets/themes/${t}-bg.webp`, `./assets/themes/${t}-props.webp`]);
 const SHELL = [
-  './', './index.html', './style.css', './main.js', './render.js', './figures.js', './art.js', './asura.js', './stage.js', './powers.js', './cam.js', './foes.js', './weather.js', './daeva.js', './macron.js', './music.js', './sfx.js',
+  './', './index.html', './style.css', './main.js', './render.js', './figures.js', './art.js', './asura.js', './stage.js', './powers.js', './cam.js', './foes.js', './weather.js', './daeva.js', './macron.js', './audio.js', './music.js', './sfx.js',
   './assets/art/atlas.json', './assets/art/asura.webp', './assets/art/foes.webp', './assets/art/fx.webp', './assets/art/daeva.webp', './assets/chars/asura.webp', './assets/chars/daeva.webp',
   './assets/audio/punch.wav', './assets/music/loops.json', './assets/music/ink-road.mp3', './assets/music/willow-rain.mp3', './assets/music/oni-drums.mp3',
   './assets/themes/themes.json', './assets/themes/oni-bg.webp', './assets/themes/oni-props.webp',
@@ -54,9 +54,23 @@ self.addEventListener('fetch', (e) => {
   e.respondWith((async () => {
     const cache = await caches.open(VERSION);
     const hit = await cache.match(req, { ignoreSearch: true });
-    if (hit) return hit;
+    if (hit) return req.headers.has('range') ? ranged(hit, req.headers.get('range')) : hit;
     const res = await fetch(req);
-    if (res.ok && res.type === 'basic') cache.put(req, res.clone());
+    if (res.ok && res.status === 200 && res.type === 'basic') cache.put(req, res.clone());
     return res;
   })());
 });
+
+// Safari's media elements ask for byte ranges and refuse a plain 200 from a
+// worker; answer cached audio with a proper 206 partial response
+async function ranged(res, header) {
+  const buf = await res.arrayBuffer(), size = buf.byteLength;
+  const m = /bytes=(\d*)-(\d*)/.exec(header || '');
+  let start = m && m[1] ? +m[1] : 0, end = m && m[2] ? +m[2] : size - 1;
+  if (m && !m[1] && m[2]) { start = Math.max(0, size - +m[2]); end = size - 1; }
+  end = Math.min(end, size - 1);
+  if (!m || start > end || start >= size) return new Response(null, { status: 416, headers: { 'Content-Range': `bytes */${size}` } });
+  return new Response(buf.slice(start, end + 1), { status: 206, statusText: 'Partial Content', headers: {
+    'Content-Type': res.headers.get('Content-Type') || 'application/octet-stream',
+    'Content-Range': `bytes ${start}-${end}/${size}`, 'Content-Length': String(end - start + 1), 'Accept-Ranges': 'bytes' } });
+}

@@ -3,6 +3,7 @@
 // Web Audio, sample-accurate looping: each file carries 0.5 s of wrap-around
 // audio on both ends, so loopStart/loopEnd sit inside continuous material and
 // the codec's start padding never reaches the loop seam.
+import { audio } from './audio.js';
 const BASE = 'assets/music/';
 export const TRACKS = { normal: 'ink-road', alt: 'willow-rain', boss: 'oni-drums' };
 
@@ -28,16 +29,15 @@ export function createMusic({ enabled = true, volume = 0.6 } = {}) {
   }
   const level = () => (on ? vol * vol : 0); // perceptual-ish volume curve
 
-  // first tap / key: browsers only let audio start from a user gesture
-  function unlock() {
-    if (ctx) { if (on && !hidden && ctx.state !== 'running') ctx.resume().catch(() => {}); return; }
-    const AC = window.AudioContext || window.webkitAudioContext; if (!AC) return;
-    ctx = new AC();
+  // the shared context (audio.js) is created/unlocked inside a real tap; it can
+  // be replaced if iOS leaves it dead after backgrounding, so rebuild the graph
+  // on every new context (decoded AudioBuffers are reusable across contexts)
+  audio.want('music', on);
+  audio.onContext((c) => {
+    ctx = c; cur = null;
     master = ctx.createGain(); master.gain.value = level(); master.connect(ctx.destination);
-    if (!on) ctx.suspend().catch(() => {});
-    if (want) start(want);
-  }
-  for (const ev of ['pointerdown', 'keydown', 'touchend']) window.addEventListener(ev, unlock, { capture: true, passive: true });
+    if (want && on) start(want);
+  });
 
   async function start(name) {
     if (!ctx) return;
@@ -56,26 +56,19 @@ export function createMusic({ enabled = true, volume = 0.6 } = {}) {
     } catch (e) { console.warn('music', e); }
   }
 
-  document.addEventListener('visibilitychange', () => {
-    hidden = document.visibilityState === 'hidden';
-    if (!ctx) return;
-    if (hidden) ctx.suspend().catch(() => {});
-    else if (on) ctx.resume().catch(() => {});
-  });
-
   return {
     // pick the loop for this wave: boss track on boss waves, stage loops alternate per 10-wave block
     setWave(w) { this.setTrack(w % 10 === 0 ? TRACKS.boss : Math.floor((w - 1) / 10) % 2 ? TRACKS.alt : TRACKS.normal); },
     setTrack(name) { if (name === want) return; want = name; if (ctx && on) start(name); },
     setEnabled(v) {
-      on = !!v;
+      on = !!v; audio.want('music', on);
       if (!ctx) return;
       const now = ctx.currentTime;
       master.gain.cancelScheduledValues(now); master.gain.setValueAtTime(master.gain.value, now);
-      if (on) { ctx.resume().catch(() => {}); master.gain.linearRampToValueAtTime(level(), now + 0.4); if (want && (!cur || cur.name !== want)) start(want); }
-      else { master.gain.linearRampToValueAtTime(0, now + 0.3); setTimeout(() => { if (!on) ctx.suspend().catch(() => {}); }, 350); }
+      if (on) { master.gain.linearRampToValueAtTime(level(), now + 0.4); if (want && (!cur || cur.name !== want)) start(want); }
+      else master.gain.linearRampToValueAtTime(0, now + 0.3);
     },
     setVolume(v) { vol = Math.max(0, Math.min(1, v)); if (master) master.gain.setTargetAtTime(level(), ctx.currentTime, 0.05); },
-    get state() { return { ctx: ctx ? ctx.state : 'locked', track: cur ? cur.name : null, want, on, vol, gain: master ? master.gain.value : 0 }; },
+    get state() { return { ctx: ctx ? ctx.state : 'locked', session: audio.state.session, track: cur ? cur.name : null, want, on, vol, gain: master ? master.gain.value : 0 }; },
   };
 }
