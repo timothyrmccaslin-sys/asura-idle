@@ -9,7 +9,7 @@ import { createSfx } from './sfx.js';
 const SAVE_KEY = 'asura-idle-save-v1';
 const PREFS_KEY = 'asura-idle-prefs-v1';
 const AUTOSAVE_MS = 5000;
-const APP_VERSION = '3.5.2'; // keep in step with VERSION in sw.js
+const APP_VERSION = '3.5.3'; // keep in step with VERSION in sw.js
 
 const UPS = {
   damage:   { name: 'Wrath',        desc: 'Raw striking power. Doubles every 25 levels.', f: (v) => fmt(v) },
@@ -396,8 +396,8 @@ function sounds(ev) {
     switch (t) {
       case 1: // hit: kind c 0 basic, 1 cleave, 2 Wrath, 3 rain drop, 4 whirlpool grind, 5 lotus bead
         if (c === 3) sfx.play('drop');
-        else if (c === 4 || c === 5) sfx.play('hit', { v: 2 }, 0.45);
-        else if (b) sfx.play('crit');
+        else if (c === 4 || c === 5) sfx.play('grind', null, 0.45);
+        else if (b) sfx.play('crit', { v: strikeKind() });
         else if (c !== 2) { if (nearBoss(x, y)) sfx.play('bossHit'); else sfx.play('hit', { v: strikeKind() }); }
         break;
       case 2: sfx.play(c ? 'bossDeath' : 'death'); break;

@@ -1,6 +1,6 @@
-// Sound effects, synthesised live with Web Audio. There are no sample files:
-// every sound is built from oscillators, filtered noise and envelopes, so the
-// effects belong to the project and add nothing to the download.
+// Sound effects, synthesised live with Web Audio from oscillators, filtered
+// noise and envelopes, plus one owner-supplied recording (the punch) that every
+// fist, palm, kick, crit and boss strike plays dry.
 // Each voice is a function (ctx, out, t, o) so the same code also renders
 // offline (OfflineAudioContext) for previews.
 
@@ -48,41 +48,55 @@ function pluck(ctx, out, t, f, peak = 0.3) { // koto-like: bright triangle with 
   const g = env(ctx, out, t, 0.002, 0.9, peak); o.connect(fl); fl.connect(g); o.start(t); o.stop(t + 1);
 }
 function thud(ctx, out, t, f0, f1, dur, peak) { return tone(ctx, out, t, dur, 'sine', f0, f1, 0.001, peak, dur * 0.6); }
+// the punch recording, played dry. Each new strike chokes the previous one with a
+// ~30 ms fade so overlapping copies at slightly different speeds never comb-filter
+// (that phasing is what made rapid hits ring metallic).
+const choke = new WeakMap();
+function strike(ctx, out, t, buf, rate, gain) {
+  const prev = choke.get(ctx);
+  if (prev) { prev.gain.cancelScheduledValues(t); prev.gain.setTargetAtTime(0, t, 0.01); }
+  const src = ctx.createBufferSource(); src.buffer = buf.buf; src.playbackRate.value = rate;
+  const g = ctx.createGain(); g.gain.value = gain; src.connect(g); g.connect(out);
+  src.start(t, buf.offset); choke.set(ctx, g);
+  return (buf.buf.duration - buf.offset) / rate;
+}
 
 // --- the voices: (ctx, out, t, o) -> duration (s)
 export const VOICES = {
   // strikes
-  whoosh(ctx, out, t) { const d = R(0.16, 0.24); nz(ctx, out, t, d, 'bandpass', R(500, 700), 1.4, d * 0.45, 0.35, R(2200, 3200)); return d; },
+  // soft air only: a fixed low-pass, no sweep and no resonance (the old band-pass sweep read as a "zzzip")
+  whoosh(ctx, out, t) { const d = R(0.14, 0.2); nz(ctx, out, t, d, 'lowpass', R(900, 1100), -3, d * 0.5, 0.3); return d; },
   hit(ctx, out, t, o = {}) { // flesh-and-cloth impact; o.v picks punch / kick / palm
     const v = o.v ?? (Math.random() * 3) | 0, p = R(0.88, 1.14);
-    // fist, palm and kick strikes all use the owner-supplied punch recording when it is loaded;
+    // fist, palm and kick strikes play only the owner-supplied punch recording, dry;
     // kicks play it ~10% lower (0.90x +/-3%) and 20% louder so they land heavier
     if (o.buf) {
       const kick = v === 1;
-      const src = ctx.createBufferSource(); src.buffer = o.buf.buf;
-      src.playbackRate.value = kick ? 0.9 * R(0.97, 1.03) : R(0.94, 1.06);
-      const g = ctx.createGain(); g.gain.value = R(0.85, 1.0) * 1.4 * (kick ? 1.2 : 1); src.connect(g); g.connect(out);
-      src.start(t, o.buf.offset); return kick ? 0.7 : 0.6;
+      return strike(ctx, out, t, o.buf, kick ? 0.9 * R(0.97, 1.03) : R(0.94, 1.06), R(0.85, 1.0) * 1.4 * (kick ? 1.2 : 1));
     }
     thud(ctx, out, t, [150, 115, 180][v] * p, 52 * p, [0.09, 0.13, 0.07][v], 0.9);
     nz(ctx, out, t, [0.05, 0.07, 0.035][v], 'bandpass', [1400, 900, 2600][v] * p, 1.2, 0.001, [0.55, 0.5, 0.7][v]);
     if (v === 2) nz(ctx, out, t, 0.02, 'highpass', 4000, 0.7, 0.001, 0.3); // palm slap
     return 0.15;
   },
-  crit(ctx, out, t) {
+  grind(ctx, out, t) { return VOICES.hit(ctx, out, t, { v: 2 }); }, // Whirlpool / Lotus contact ticks stay synthesised so they never cut off a strike
+  crit(ctx, out, t, o = {}) {
+    // with the recording loaded: the same dry strike, harder, plus a clean sine sub (no crack, no ring)
+    if (o.buf) { const d = strike(ctx, out, t, o.buf, (o.v === 1 ? 0.88 : 0.95) * R(0.98, 1.02), 1.4 * 1.45); thud(ctx, out, t, 85, 40, 0.18, 0.5); return d; }
     VOICES.hit(ctx, out, t, { v: 1 });
     nz(ctx, out, t, 0.09, 'highpass', 2500, 0.8, 0.001, 0.6);       // crack
     tone(ctx, out, t, 0.25, 'triangle', R(1150, 1300), R(900, 1000), 0.001, 0.14); // ring
     thud(ctx, out, t + 0.01, 90, 40, 0.22, 0.8);
     return 0.3;
   },
-  death(ctx, out, t) { // the painting tears: soft rip + splatter + falling tone
-    nz(ctx, out, t, 0.35, 'bandpass', R(1800, 2400), 0.9, 0.01, 0.35, 500);
-    nz(ctx, out, t + 0.02, 0.18, 'lowpass', 700, 1, 0.002, 0.5);
-    tone(ctx, out, t, 0.3, 'sine', R(320, 380), 110, 0.005, 0.18);
-    return 0.4;
+  death(ctx, out, t) { // the painting tears: a soft low-Q rip and a dull splatter, no tonal layer
+    nz(ctx, out, t + 0.03, 0.22, 'bandpass', R(1100, 1400), 0.3, 0.012, 0.4);
+    nz(ctx, out, t + 0.05, 0.14, 'lowpass', 700, -3, 0.004, 0.4);
+    return 0.35;
   },
-  bossHit(ctx, out, t) { thud(ctx, out, t, 95, 38, 0.3, 1); nz(ctx, out, t, 0.12, 'bandpass', 600, 1, 0.001, 0.6); nz(ctx, out, t, 0.05, 'highpass', 3000, 0.7, 0.001, 0.25); return 0.35; },
+  bossHit(ctx, out, t, o = {}) {
+    if (o.buf) { const d = strike(ctx, out, t, o.buf, 0.84 * R(0.98, 1.02), 1.4 * 1.3); thud(ctx, out, t, 75, 35, 0.25, 0.6); return d; }
+    thud(ctx, out, t, 95, 38, 0.3, 1); nz(ctx, out, t, 0.12, 'bandpass', 600, 1, 0.001, 0.6); nz(ctx, out, t, 0.05, 'highpass', 3000, 0.7, 0.001, 0.25); return 0.35; },
   bossDeath(ctx, out, t) {
     VOICES.taiko(ctx, out, t, { big: true });
     bell(ctx, out, t + 0.05, 98, 3.2, 0.35);                         // temple gong
@@ -109,15 +123,14 @@ export const VOICES = {
   },
   storm(ctx, out, t) { // crackling red lightning + thunder roll
     for (let i = 0; i < 14; i++) nz(ctx, out, t + Math.random() * 0.6, R(0.01, 0.04), 'highpass', R(2500, 6000), 0.7, 0.0005, R(0.2, 0.5));
-    const z = tone(ctx, out, t + 0.35, 0.3, 'sawtooth', 900, 120, 0.002, 0.12);
     nz(ctx, out, t + 0.4, 0.08, 'highpass', 1500, 0.7, 0.001, 0.8);   // strike
     nz(ctx, out, t + 0.45, 2.0, 'lowpass', 260, 0.9, 0.08, 0.65, 70); // thunder
     return 2.4;
   },
-  zap(ctx, out, t) { // chain lightning jump
-    nz(ctx, out, t, 0.06, 'highpass', R(3000, 5000), 0.8, 0.0005, 0.35);
-    tone(ctx, out, t, 0.08, 'sawtooth', R(1400, 1800), 300, 0.001, 0.06);
-    return 0.1;
+  zap(ctx, out, t) { // chain lightning jump: two short dry crackles, no buzzing sawtooth
+    nz(ctx, out, t, 0.025, 'bandpass', R(2500, 3500), 0.5, 0.0005, 0.22);
+    nz(ctx, out, t + R(0.02, 0.04), 0.02, 'bandpass', R(2000, 3000), 0.5, 0.0005, 0.14);
+    return 0.07;
   },
   beads(ctx, out, t, o = {}) { // a mala shaken into orbit: wooden clicks + a low red hum
     const n = 14;
@@ -181,12 +194,13 @@ export const VOICES = {
 
 // per-sound throttles (min seconds between plays) and voice classes for the
 // concurrency cap, so a flurry of 30 hits/s stays a texture, not a wall
-const MIN = { whoosh: 0.09, hit: 0.045, crit: 0.08, death: 0.07, bossHit: 0.12, zap: 0.06, drop: 0.07, heal: 0.35, buy: 0.07, waveClear: 1.2 };
-const CLASS = { whoosh: 'hit', hit: 'hit', crit: 'hit', death: 'hit', bossHit: 'hit', zap: 'hit', drop: 'hit' };
+const MIN = { whoosh: 0.09, hit: 0.045, grind: 0.06, crit: 0.08, death: 0.07, bossHit: 0.12, zap: 0.06, drop: 0.07, heal: 0.35, buy: 0.07, waveClear: 1.2 };
+const CLASS = { whoosh: 'hit', hit: 'hit', grind: 'hit', crit: 'hit', death: 'hit', bossHit: 'hit', zap: 'hit', drop: 'hit' };
 const CAP = { hit: 6 };
+const SAMPLED = new Set(['hit', 'crit', 'bossHit']); // voices that play the punch recording when it is loaded
 // per-voice level trims (measured short-term loudness, balanced so hits sit low,
 // abilities and boss moments stand out, UI blips stay subtle)
-export const LEVEL = { whoosh: 1.9, hit: 0.75, crit: 0.63, death: 1.6, bossHit: 0.67, wrath: 0.67, storm: 1.7, zap: 1.3, drop: 1, beads: 1.5, sixarms: 0.8,
+export const LEVEL = { whoosh: 1.2, hit: 0.75, grind: 0.75, crit: 0.63, death: 1.6, bossHit: 0.67, wrath: 0.67, storm: 1.7, zap: 1.0, drop: 1, beads: 1.5, sixarms: 0.8,
   tide: 0.9, rain: 2.4, whirlpool: 2.3, lotus: 1.35, heal: 1.8, buy: 2.7, waveClear: 2.1, bossAppear: 0.7, bossDeath: 0.7, defeat: 0.8, unlock: 2.1 };
 
 // skip codec padding / silence so the recorded punch lands on the frame it is triggered
@@ -198,7 +212,7 @@ export function sampleStart(buf) {
 
 export function createSfx({ enabled = true, volume = 0.6 } = {}) {
   let ctx = null, master = null, comp = null, on = enabled, vol = volume, hidden = false;
-  const last = {}, live = {};
+  const last = {}, live = {}; let lastStrike = -9;
   const level = () => (on ? vol * vol * 1.1 : 0); // hits sit just under the music, ability hits level with it
   function unlock() {
     if (ctx) { if (on && !hidden && ctx.state !== 'running') ctx.resume().catch(() => {}); return; }
@@ -217,10 +231,10 @@ export function createSfx({ enabled = true, volume = 0.6 } = {}) {
     if (hidden) ctx.suspend().catch(() => {}); else if (on) ctx.resume().catch(() => {});
   });
   const stats = { played: 0, dropped: 0, punch: 'pending' };
-  let punch = null; // { buf, offset } decoded from assets/audio/punch.mp3
+  let punch = null; // { buf, offset } decoded from assets/audio/punch.wav
   async function loadPunch() {
     try {
-      const ab = await (await fetch('assets/audio/punch.mp3')).arrayBuffer();
+      const ab = await (await fetch('assets/audio/punch.wav')).arrayBuffer();
       const buf = await new Promise((res, rej) => { const p = ctx.decodeAudioData(ab, res, rej); if (p && p.catch) p.catch(rej); });
       punch = { buf, offset: sampleStart(buf) }; stats.punch = 'sample';
     } catch (e) { stats.punch = 'synth'; console.warn('punch sample unavailable, using synthesised hit', e); }
@@ -230,12 +244,14 @@ export function createSfx({ enabled = true, volume = 0.6 } = {}) {
     const v = VOICES[name]; if (!v) return false;
     const now = ctx.currentTime;
     if (MIN[name] && now - (last[name] ?? -9) < MIN[name]) { stats.dropped++; return false; }
+    const usesSample = punch && SAMPLED.has(name);
+    if (usesSample && now - lastStrike < 0.035) { stats.dropped++; return false; } // no stacked starts of the same recording
     const cls = CLASS[name];
     if (cls) { const l = (live[cls] = (live[cls] || []).filter((e) => e > now)); if (l.length >= CAP[cls]) { stats.dropped++; return false; } }
     last[name] = now;
     const g = ctx.createGain(); g.gain.value = (LEVEL[name] ?? 1) * gain; g.connect(comp);
     o = o || {};
-    if (name === 'hit' && punch) o = { ...o, buf: punch }; // crit calls VOICES.hit directly, so it stays synthesised
+    if (usesSample) { o = { ...o, buf: punch }; lastStrike = now; }
     const d = v(ctx, g, now + 0.005, o);
     setTimeout(() => g.disconnect(), (d + 0.5) * 1000);
     if (cls) live[cls].push(now + Math.min(d, 0.25));

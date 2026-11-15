@@ -30,15 +30,17 @@ cp /tmp/music/loops.json assets/music/
 
 # Sound effects
 
-**Punch sample:** `assets/audio/punch.mp3` is a recording supplied by the
-project owner for use in Asura. It was trimmed, loudness-matched and converted
-to mono. It plays for fist, palm and kick hits, with small random pitch and
-level variation; kicks play it about 10% lower and a little louder. If it can't
-be loaded, the game falls back to the synthesised hits.
+**Punch sample:** `assets/audio/punch.wav` is a recording supplied by the
+project owner for use in Asura. It was trimmed to 0.42 s, loudness-matched and
+converted to mono, and is stored losslessly (16-bit WAV). It plays dry, with no
+effects or extra layers, for fist, palm and kick hits, crits and boss hits, with
+small random pitch and level variation; kicks play it about 10% lower and a
+little louder. Each new strike fades out the previous one so copies never
+overlap. If it can't be loaded, the game falls back to the synthesised hits.
 
 Every other sound effect is original. They are synthesised live in the browser by
 `sfx.js`, using Web Audio oscillators, filtered noise, envelopes and a
-compressor. There are no sample files and no third-party audio, so they are
+compressor. There is no third-party audio, so they are
 project-owned under the same terms as this repo. The same code renders the
 preview offline with `OfflineAudioContext`.
 
