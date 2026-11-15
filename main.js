@@ -4,11 +4,12 @@ import init, { Game } from './pkg/asura_core.js';
 import { createRenderer, fmt } from './render.js';
 import { macronHTML } from './macron.js';
 import { createMusic } from './music.js';
+import { createSfx } from './sfx.js';
 
 const SAVE_KEY = 'asura-idle-save-v1';
 const PREFS_KEY = 'asura-idle-prefs-v1';
 const AUTOSAVE_MS = 5000;
-const APP_VERSION = '3.4.0'; // keep in step with VERSION in sw.js
+const APP_VERSION = '3.5.0'; // keep in step with VERSION in sw.js
 
 const UPS = {
   damage:   { name: 'Wrath',        desc: 'Raw striking power. Doubles every 25 levels.', f: (v) => fmt(v) },
@@ -58,7 +59,7 @@ let ABS = CHARS.asura.abs, curChar = '';
 const BOSSES = { 8: 'Oni Warlord', 9: 'Tengu King', 10: 'The Shogun', 11: 'Orochi', 12: 'Onryō Queen' };
 
 const $ = (id) => document.getElementById(id);
-const prefs = Object.assign({ buy: 1, fx: false, nums: true, intro: false, music: true, vol: 0.6 }, safeJSON(localStorage.getItem(PREFS_KEY)) || {});
+const prefs = Object.assign({ buy: 1, fx: false, nums: true, intro: false, music: true, vol: 0.6, sfx: true, sfxVol: 0.6 }, safeJSON(localStorage.getItem(PREFS_KEY)) || {});
 function safeJSON(s) { try { return s ? JSON.parse(s) : null; } catch { return null; } }
 function savePrefs() { try { localStorage.setItem(PREFS_KEY, JSON.stringify(prefs)); } catch {} }
 function dur(sec) {
@@ -67,7 +68,7 @@ function dur(sec) {
   return h ? `${h}h ${m}m` : m ? `${m}m ${s}s` : `${s}s`;
 }
 
-let game, renderer, ui = null, music = null;
+let game, renderer, ui = null, music = null, sfx = null;
 
 function save() {
   if (!game) return;
@@ -123,7 +124,7 @@ function buildUI() {
     const c = document.createElement('div'); c.className = 'card bead-card';
     c.innerHTML = `<div class="c-name">${d.name}<span class="c-lvl"></span></div><div class="c-desc">${d.desc}</div><div class="c-val"></div>
       <button class="buy"><span class="b-n">beads</span><span class="b-cost"></span></button>`;
-    c.querySelector('.buy').addEventListener('click', () => { if (game.buy_shop(i)) { refresh(true); save(); } });
+    c.querySelector('.buy').addEventListener('click', () => { if (game.buy_shop(i)) { sfx.play('buy'); refresh(true); save(); } });
     shop.appendChild(c);
     shopEls[key] = { lvl: c.querySelector('.c-lvl'), btn: c.querySelector('.buy'), cost: c.querySelector('.b-cost') };
   });
@@ -133,7 +134,7 @@ function buildUI() {
   list.addEventListener('pointerdown', (e) => {
     const btn = e.target.closest('.buy'); if (!btn || btn.disabled) return;
     const idx = Object.keys(UPS).indexOf(btn.dataset.key);
-    const buyOnce = () => { const n = game.buy(idx, prefs.buy); if (n) refresh(true); return n; };
+    const buyOnce = () => { const n = game.buy(idx, prefs.buy); if (n) { sfx.play('buy'); refresh(true); } return n; };
     buyOnce();
     let iv = null;
     const to = setTimeout(() => { iv = setInterval(() => { if (!buyOnce()) stop(); }, 110); }, 420);
@@ -142,7 +143,7 @@ function buildUI() {
   });
   list.addEventListener('keydown', (e) => {
     const btn = e.target.closest('.buy'); if (!btn || (e.key !== 'Enter' && e.key !== ' ')) return;
-    e.preventDefault(); if (game.buy(Object.keys(UPS).indexOf(btn.dataset.key), prefs.buy)) refresh(true);
+    e.preventDefault(); if (game.buy(Object.keys(UPS).indexOf(btn.dataset.key), prefs.buy)) { sfx.play('buy'); refresh(true); }
   });
 
   document.querySelectorAll('#buy-mult button').forEach((b) => {
@@ -170,6 +171,12 @@ function buildUI() {
   $('opt-vol').addEventListener('input', (e) => { prefs.vol = +e.target.value / 100; music.setVolume(prefs.vol); $('vol-val').textContent = e.target.value + '%'; });
   $('opt-vol').addEventListener('change', savePrefs);
   $('vol-val').textContent = Math.round(prefs.vol * 100) + '%';
+  $('opt-sfx').checked = prefs.sfx; $('opt-sfxvol').disabled = !prefs.sfx;
+  $('opt-sfx').addEventListener('change', (e) => { prefs.sfx = e.target.checked; savePrefs(); sfx.setEnabled(prefs.sfx); $('opt-sfxvol').disabled = !prefs.sfx; });
+  $('opt-sfxvol').value = Math.round(prefs.sfxVol * 100);
+  $('opt-sfxvol').addEventListener('input', (e) => { prefs.sfxVol = +e.target.value / 100; sfx.setVolume(prefs.sfxVol); $('sfxvol-val').textContent = e.target.value + '%'; });
+  $('opt-sfxvol').addEventListener('change', () => { savePrefs(); sfx.play('hit', { v: 0 }); });
+  $('sfxvol-val').textContent = Math.round(prefs.sfxVol * 100) + '%';
   $('save-btn').addEventListener('click', () => { save(); toast('Saved to this browser.'); });
   $('export-btn').addEventListener('click', doExport);
   $('import-btn').addEventListener('click', doImport);
@@ -368,6 +375,37 @@ function onEvents(ev) {
   }
 }
 
+// ------------------------------------------------------------ sound effects
+const CAST_SFX = [['wrath', 'storm', 'beads', 'sixarms'], ['tide', 'rain', 'whirlpool', 'lotus']];
+function nearBoss(x, y) {
+  const en = game.enemies();
+  for (let o = 0; o < en.length; o += 11) if (en[o + 9] > 0 && Math.abs(en[o + 2] - x) < 0.12 && Math.abs(en[o + 3] - y) < 0.12) return true;
+  return false;
+}
+function sounds(ev) {
+  if (!sfx.state.on) return;
+  for (let i = 0; i < ev.length; i += 6) {
+    const t = ev[i], x = ev[i + 1], y = ev[i + 2], a = ev[i + 3], b = ev[i + 4], c = ev[i + 5];
+    switch (t) {
+      case 1: // hit: kind c 0 basic, 1 cleave, 2 Wrath, 3 rain drop, 4 whirlpool grind, 5 lotus bead
+        if (c === 3) sfx.play('drop');
+        else if (c === 4 || c === 5) sfx.play('hit', { v: 2 }, 0.45);
+        else if (b) sfx.play('crit');
+        else if (c !== 2) { if (nearBoss(x, y)) sfx.play('bossHit'); else sfx.play('hit'); }
+        break;
+      case 2: sfx.play(c ? 'bossDeath' : 'death'); break;
+      case 3: sfx.play('whoosh'); break;
+      case 5: sfx.play('zap'); break;
+      case 7: if (a % 10 !== 0) sfx.play('waveClear'); break;
+      case 8: sfx.play('defeat'); break;
+      case 9: sfx.play('bossAppear'); break;
+      case 10: sfx.play('heal'); break;
+      case 11: { const n = (CAST_SFX[b | 0] || CAST_SFX[0])[a | 0]; if (n) sfx.play(n); break; }
+      case 14: sfx.play('unlock'); break;
+    }
+  }
+}
+
 // ------------------------------------------------------------ main loop
 let last = performance.now(), lastSaveT = performance.now();
 function frame(now) {
@@ -378,7 +416,7 @@ function frame(now) {
     while (dt > 0) { const s = Math.min(dt, 0.25); game.tick(s); dt -= s; }
   }
   const ev = game.drain_events();
-  if (ev.length) { renderer.handle(ev); onEvents(ev); }
+  if (ev.length) { renderer.handle(ev); onEvents(ev); sounds(ev); }
   const f = game.frame();
   music.setWave(f[4] | 0);
   renderer.draw(f, game.enemies(), Math.min((now - (frame.prev || now)) / 1000, 0.1));
@@ -469,6 +507,7 @@ async function main() {
   game = new Game(Math.floor(Math.random() * 2 ** 31));
   renderer = createRenderer($('arena'));
   music = createMusic({ enabled: prefs.music, volume: prefs.vol });
+  sfx = createSfx({ enabled: prefs.sfx, volume: prefs.sfxVol });
   renderer.setReduced(prefs.fx); renderer.setNumbers(prefs.nums);
   buildUI();
   setupPWA();
@@ -507,7 +546,7 @@ async function main() {
   window.addEventListener('beforeunload', save);
 
   // test/debug handle (no effect on play)
-  window.__asura = { game, save, refresh, SAVE_KEY, get renderer() { return renderer; }, get music() { return music; } };
+  window.__asura = { game, save, refresh, SAVE_KEY, get renderer() { return renderer; }, get music() { return music; }, get sfx() { return sfx; } };
   requestAnimationFrame((t) => { last = t; frame.prev = t; frame(t); });
 }
 

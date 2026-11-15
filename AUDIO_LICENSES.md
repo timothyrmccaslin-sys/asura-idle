@@ -1,4 +1,4 @@
-# Music licenses
+# Audio licenses (music and sound effects)
 
 All music in `assets/music/` is original and was made for Asura. No third-party
 recordings, samples, loops or sample packs are used.
@@ -27,3 +27,17 @@ python3 tools/music.py /tmp/music
 for n in ink-road willow-rain oni-drums; do ffmpeg -i /tmp/music/$n.wav -c:a libmp3lame -b:a 96k assets/music/$n.mp3; done
 cp /tmp/music/loops.json assets/music/
 ```
+
+# Sound effects
+
+All sound effects are original. They are synthesised live in the browser by
+`sfx.js`, using Web Audio oscillators, filtered noise, envelopes and a
+compressor. There are no sample files and no third-party audio, so they are
+project-owned under the same terms as this repo. The same code renders the
+preview offline with `OfflineAudioContext`.
+
+The effects are: strike whoosh, three hit variations (punch, kick and palm,
+each with random pitch), crit, enemy death, boss hit, boss death (taiko and
+gong), Wrath Burst, Storm, chain zap, Blood Beads, Six Arms, Tidal Surge,
+Healing Rain, rain droplet, Whirlpool, Blue Lotus Beads, heal tick, upgrade
+purchase, boss appears (taiko), wave clear (koto), defeat and character unlock.
