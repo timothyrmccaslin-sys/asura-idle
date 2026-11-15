@@ -15,8 +15,8 @@ function loadImg(src) {
 
 export async function loadArt() {
   const meta = await (await fetch(BASE + 'atlas.json')).json();
-  const [asura, foes, fx] = await Promise.all([meta.asura, meta.foes, meta.fx].map((m) => loadImg(BASE + m.file)));
-  return { meta, img: { asura, foes, fx } };
+  const [asura, foes, fx, daeva] = await Promise.all([meta.asura, meta.foes, meta.fx, meta.daeva].map((m) => (m ? loadImg(BASE + m.file) : null)));
+  return { meta, img: { asura, foes, fx, daeva } };
 }
 
 // high quality downscale: halve step by step, then a final resample
@@ -59,6 +59,11 @@ export function flashOf(fr) {
 }
 export function redOf(fr) {
   return fr.red || (fr.red = tinted(fr.c, 'rgba(179,32,42,1)', 'source-in'));
+}
+// the Daeva's accent: an inky ultramarine
+export const BLUE = '#2f6bff';
+export function blueOf(fr) {
+  return fr.blue || (fr.blue = tinted(fr.c, 'rgba(38,92,224,1)', 'source-in'));
 }
 
 // Unwrap the painted enso (a ring) into a straight dry-brush strip, so a trail

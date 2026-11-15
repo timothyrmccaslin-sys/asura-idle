@@ -1,6 +1,7 @@
 import { drawFigure, drawAsura as drawAsuraFig, brush } from './figures.js';
-import { loadArt, makeFrame, flashOf as paintedFlash, tinted, unwrapRing } from './art.js';
+import { loadArt, makeFrame, flashOf as paintedFlash, tinted, unwrapRing, blueOf } from './art.js';
 import { createAsura } from './asura.js';
+import { DAEVA_MOVES, daevaPick, createWater } from './daeva.js';
 import { createStage } from './stage.js';
 import { createPowers } from './powers.js';
 import { createFoeRig } from './foes.js';
@@ -17,7 +18,8 @@ const RED = '#b3202a';
 const RED2 = '#d23a3a';
 const SQ = 0.8; // vertical squash: the ground is seen from slightly above
 
-const EV = { HIT: 1, KILL: 2, ATTACK: 3, WRATH: 4, CHAIN: 5, HURT: 6, WAVE: 7, DEFEAT: 8, BOSS: 9, HEAL: 10, CAST: 11 };
+const EV = { HIT: 1, KILL: 2, ATTACK: 3, WRATH: 4, CHAIN: 5, HURT: 6, WAVE: 7, DEFEAT: 8, BOSS: 9, HEAL: 10, CAST: 11, TIDE: 12, DROP: 13, UNLOCK: 14, SWITCH: 15, POOL: 16 };
+const BLUE_INK = '#2f6bff';
 
 function rng(seed) {
   let a = seed >>> 0;
@@ -63,14 +65,30 @@ export function createRenderer(canvas) {
   let shake = 0, hurtFlash = 0, healFlash = 0, time = 0;
   // painted art (falls back to the procedural figures until the atlases load)
   let art = null, artCache = new Map();
-  const anim = createAsura();
+  const animA = createAsura();
+  // the Daeva: same animator, her own fluid move set, blue brush arcs and beads
+  const animD = createAsura({
+    moves: DAEVA_MOVES, pick: daevaPick, trailAll: true, bead: '#2f6bff',
+    ribbon: ['rgba(40,92,220,.9)', 'rgba(28,66,180,.85)', 'rgba(22,20,18,.9)', 'rgba(22,20,18,.85)', 'rgba(30,27,24,.7)'],
+    tint: blueOf,
+  });
+  let anim = animA, charId = 0;
   const stage = createStage();
-  const powers = createPowers();
+  const powersA = createPowers();
+  const powersD = createPowers({ blue: true });
+  let powers = powersA;
+  const water = createWater();
   const rig = createFoeRig({ frame: (k) => (art ? foeFrame(k) : null), flashOf: paintedFlash });
-  powers.setHooks({
-    impact: (x, y) => { stamp(x, y, 0.2, true, 0.3); stamp(x, y, 0.12, true, 5, true); },
+  for (const pw of [powersA, powersD]) pw.setHooks({
+    impact: (x, y) => { const r = pw === powersD ? 'b' : true; stamp(x, y, 0.2, r, 0.3); stamp(x, y, 0.12, r, 5, true); },
     shake: (v) => { if (!reduced) shake = Math.max(shake, v); },
   });
+  const tk = (red) => (red === 'b' ? 'b' : red ? 'r' : 'k');
+  // switch the drawn character (the core already swapped her rules)
+  function setChar(id) {
+    if (id === charId) return;
+    charId = id; anim = id === 1 ? animD : animA; powers = id === 1 ? powersD : powersA;
+  }
   let splatSet = false;
   const stamps = [];   // painted splatter bursts
   const delayed = [];  // events held back to land on an animation beat
@@ -347,6 +365,16 @@ export function createRenderer(canvas) {
       return makeFrame(art, 'asura', 'A_' + name, asuraH() / m.h);
     });
   }
+  // her painted set shares his atlas scale (sizes relative to each other kept)
+  function getPoseD(name) {
+    if (!art.meta.daeva) return getPose(name);
+    return cached('D_' + name, () => {
+      const m = art.meta.asura.frames.A_idle;
+      const fr = makeFrame(art, 'daeva', 'D_' + name, asuraH() / m.h);
+      if (fr) fr.key = 'D_' + name;
+      return fr || getPose(name);
+    });
+  }
   function foeFrame(kind) {
     return cached('E' + kind, () => {
       const m = art.meta.foes.frames['E' + kind];
@@ -363,7 +391,7 @@ export function createRenderer(canvas) {
   }
   // straight dry-brush strip unwrapped from the painted enso (see art.js)
   function strokeTex(red) {
-    return cached('stroke' + (red ? 'r' : 'k'), () => {
+    return cached('stroke' + tk(red), () => {
       const m = art.meta.fx.frames.FX_arc;
       const fr = makeFrame(art, 'fx', 'FX_arc', 1);
       const strip = unwrapRing(fr.c, 184.5, 176.2, 145.9, 145.9 - 62, 145.9 + 50, 0.3, Math.PI * 2 - 0.3);
@@ -371,19 +399,31 @@ export function createRenderer(canvas) {
       const th = Math.max(8, Math.round(asuraH() * 0.13 * 1.3)), kk = th / strip.height;
       const sm = document.createElement('canvas'); sm.width = Math.round(strip.width * kk); sm.height = th;
       const sg = sm.getContext('2d'); sg.imageSmoothingQuality = 'high'; sg.drawImage(strip, 0, 0, sm.width, sm.height);
-      return red ? tinted(sm, '#b3202a') : sm;
+      return red === 'b' ? tinted(tinted(sm, '#1d47c4', 'source-atop', 0.62), 'rgba(47,107,255,1)', 'source-atop', 0.25) : red ? tinted(sm, '#b3202a') : sm;
     });
   }
+  // blue variants: the black splatter washed ultramarine, ink still showing through
+  const blueFr = (fr) => {
+    if (!fr) return fr;
+    // a soft ultramarine wash bleeding out around a dark ink core
+    const c = document.createElement('canvas'); c.width = fr.c.width; c.height = fr.c.height;
+    const g = c.getContext('2d'), w = c.width, h = c.height;
+    g.globalAlpha = 0.6; g.drawImage(tinted(fr.c, '#2f6bff', 'source-in'), 0, 0);
+    g.globalAlpha = 0.95; g.drawImage(tinted(fr.c, '#14204a', 'source-atop', 0.7), w * 0.17, h * 0.17, w * 0.66, h * 0.66);
+    return { ...fr, c };
+  };
   function dropTex(red) {
-    return cached('drop' + (red ? 'r' : 'k'), () => {
-      const m = art.meta.fx.frames[red ? 'FX_splatred' : 'FX_splat'];
-      return makeFrame(art, 'fx', red ? 'FX_splatred' : 'FX_splat', (16 * dpr) / m.w);
+    return cached('drop' + tk(red), () => {
+      const r = red === true, m = art.meta.fx.frames[r ? 'FX_splatred' : 'FX_splat'];
+      const fr = makeFrame(art, 'fx', r ? 'FX_splatred' : 'FX_splat', (16 * dpr) / m.w);
+      return red === 'b' ? blueFr(fr) : fr;
     });
   }
   function stampTex(red) {
-    return cached('splat' + (red ? 'r' : 'k'), () => {
-      const m = art.meta.fx.frames[red ? 'FX_splatred' : 'FX_splat'];
-      return makeFrame(art, 'fx', red ? 'FX_splatred' : 'FX_splat', Math.min(1, (0.3 * scale) / m.w));
+    return cached('splat' + tk(red), () => {
+      const r = red === true, m = art.meta.fx.frames[r ? 'FX_splatred' : 'FX_splat'];
+      const fr = makeFrame(art, 'fx', r ? 'FX_splatred' : 'FX_splat', Math.min(1, (0.3 * scale) / m.w));
+      return red === 'b' ? blueFr(fr) : fr;
     });
   }
   // a painted splatter burst; ground = flattened decal that lingers
@@ -453,13 +493,16 @@ export function createRenderer(canvas) {
     const t0 = performance.now();
     for (const p of POSES) { if (!artCache.has('A_' + p)) { getPose(p); if (performance.now() - t0 > 6) return; } }
     if (!artCache.has('arck')) { arcTex(false); arcTex(true); stampTex(false); stampTex(true); strokeTex(false); strokeTex(true); dropTex(false); dropTex(true); }
+    if (charId === 1 && !artCache.has('splatb')) { stampTex('b'); strokeTex('b'); dropTex('b'); }
+    if (charId === 1) for (const p of POSES) { if (!artCache.has('D_' + p)) { getPoseD(p); if (performance.now() - t0 > 6) return; } }
     for (let k = 0; k < 13; k++) { if (!artCache.has('E' + k)) { foeFrame(k); if (performance.now() - t0 > 6) return; } }
   }
 
   function drawAsura(f, t) {
     if (art) {
       powers.drawBack(ctx);
-      anim.draw(ctx, lastDt, getPose, strokeTex, f);
+      if (charId === 1) anim.draw(ctx, lastDt, getPoseD, (red) => strokeTex(red ? 'b' : false), f);
+      else anim.draw(ctx, lastDt, getPose, strokeTex, f);
       powers.drawFront(ctx);
       return;
     }
@@ -479,7 +522,7 @@ export function createRenderer(canvas) {
     const max = reduced ? 30 : lite ? 30 : art ? 70 : 200;
     for (let i = 0; i < n && parts.length < max; i++) {
       const a = R() * Math.PI * 2, v = (0.15 + R() * 0.5) * power;
-      parts.push({ x, y, z: 0, vx: Math.cos(a) * v, vy: Math.sin(a) * v, vz: 0.3 + R() * 0.6 * power, r: (0.6 + R() * 1.9) * dpr, red: red && R() < 0.8, life: 0.7 + R() * 0.5 });
+      parts.push({ x, y, z: 0, vx: Math.cos(a) * v, vy: Math.sin(a) * v, vz: 0.3 + R() * 0.6 * power, r: (0.6 + R() * 1.9) * dpr, red: red && R() < 0.8 ? red : false, life: 0.7 + R() * 0.5 });
     }
   }
   function decal(x, y, s, red) {
@@ -497,7 +540,8 @@ export function createRenderer(canvas) {
     // Wrath Burst: the slam lands a beat after the cast, so its shockwave and
     // numbers are held for that beat (visual only; the core already applied it)
     let slamDelay = 0;
-    if (!late && art) for (let i = 0; i < ev.length; i += 6) if (ev[i] === EV.CAST && ev[i + 3] === 0) slamDelay = anim.castSlam();
+    for (let i = 0; i < ev.length; i += 6) if (ev[i] === EV.SWITCH || ev[i] === EV.UNLOCK) { if (ev[i] === EV.SWITCH) setChar(ev[i + 3] | 0); }
+    if (!late && art) for (let i = 0; i < ev.length; i += 6) if (ev[i] === EV.CAST && ev[i + 3] === 0) { const d = anim.castSlam(); if (ev[i + 4] !== 1) slamDelay = d; }
     const hold = [];
     const storm = lastF ? lastF[7] > 0 : false, arms = lastF ? lastF[9] > 0 : false, range = lastF ? lastF[1] : 0.4;
     for (let i = 0; i < ev.length; i += 6) {
@@ -509,11 +553,16 @@ export function createRenderer(canvas) {
           if (art) {
             if (b && c === 0) {
               anim.onCrit();
-              stamp(x, y, 0.26, true, 0.45);
-              if (R() < 0.25) stamp(x, y, 0.1, true, 4, true);
-            } else stamp(x, y, c === 2 ? 0.14 : c === 1 ? 0.08 : 0.075, false, 0.26);
+              const cr = charId === 1 ? 'b' : true;
+              stamp(x, y, charId === 1 ? 0.15 : 0.26, cr, 0.45);
+              if (R() < 0.25) stamp(x, y, 0.1, cr, 4, true);
+            } else if (charId === 1) {
+            // her hits: water flung off the strike (rain drops, whirlpool grind, lotus beads)
+            stamp(x, y, c === 3 ? 0.08 : c === 4 ? 0.06 : c === 5 ? 0.05 : 0.065, c === 4 || R() < 0.4 ? false : 'b', 0.26);
+            if (c === 0 || c === 3) water.onHit(x, y);
+          } else stamp(x, y, c === 2 ? 0.14 : c === 1 ? 0.08 : 0.075, false, 0.26);
           } else if (slashes.length < 50) slashes.push({ x, y, ang: R() * Math.PI, life: 0.22, red: !!b, big: c === 2 });
-          splat(x, y, b ? 5 : art ? (R() < 0.5 ? 1 : 0) : 2, !!b, b ? 1.2 : 0.7);
+          splat(x, y, b ? 5 : art ? (R() < 0.5 ? 1 : 0) : 2, charId === 1 ? 'b' : !!b, b ? 1.2 : 0.7);
           if (b && !reduced) shake = Math.max(shake, 3);
           break;
         case EV.KILL:
@@ -545,6 +594,17 @@ export function createRenderer(canvas) {
           break;
         case EV.HEAL:
           healFlash = 1;
+          break;
+        case EV.TIDE:
+          water.onTide(a);
+          if (art) for (let k = 0; k < (reduced ? 2 : 6); k++) { const q = R() * Math.PI * 2, d = 0.05 + R() * 0.12; stamp(Math.cos(q) * d, Math.sin(q) * d + AY * 0.5, 0.14, 'b', 6, true); }
+          if (!reduced) shake = Math.max(shake, 6);
+          break;
+        case EV.DROP:
+          water.onDrop(x, y);
+          break;
+        case EV.POOL:
+          water.onPool(x, y, a);
           break;
       }
     }
@@ -583,6 +643,7 @@ export function createRenderer(canvas) {
     govern(dtReal);
     cam = stage.cam || camDefault;
     aY = toY(AY);
+    if (f.length > 17) setChar(f[17] | 0);
     if (art) dt = dtReal * anim.update(dtReal, f, en, f[1], { reduced, lite, H: asuraH(), X: cx, Y: aY, dpr, SQ: cam.q, scale, proj });
     lastDt = dt;
     time += dt;
@@ -602,7 +663,10 @@ export function createRenderer(canvas) {
       if (boss) { stamp(x * 0.45, y * 0.45, 0.2, true, 0.3); stamp(x * 0.5, y * 0.5, 0.16, false, 4, true); if (!reduced) shake = Math.max(shake, 6); }
       else if (!reduced && !lite) stamp(x * 0.55, y * 0.55, 0.07, R() < 0.3, 0.2);
     });
-    { const p = anim.pose; powers.update(dt, f, en, { X: cx, Y: aY, H: asuraH(), scale, SQ: cam.q, proj, dpr, reduced, lite, dx: art && p ? p.dx || 0 : 0 }); }
+    { const p = anim.pose, env = { X: cx, Y: aY, H: asuraH(), scale, SQ: cam.q, proj, dpr, reduced, lite, dx: art && p ? p.dx || 0 : 0, AY };
+      if (charId === 1) { const g = Array.from(f); g[7] = 0; g[8] = f[20] || 0; powers.update(dt, g, en, env); }
+      else powers.update(dt, f, en, env);
+      water.update(dt, f, env); }
     const t = time;
     ctx.setTransform(1, 0, 0, 1, 0, 0);
     let sx = 0, sy = 0;
@@ -639,6 +703,7 @@ export function createRenderer(canvas) {
 
     // range circle
     brushRing(f[1], reduced ? 0 : t);
+    water.drawGround(ctx); ctx.setTransform(1, 0, 0, 1, sx, sy);
 
     // dissolving corpses: the painting tears into strips and fades into the paper
     for (let i = corpses.length - 1; i >= 0; i--) {
@@ -734,13 +799,14 @@ export function createRenderer(canvas) {
     if (!asuraDrawn) drawAsura(f, t);
 
     // ink smoke rising off the Asura
-    if (!reduced && R() < dt * (f[7] > 0 ? 18 : 5) && wisps.length < 60) wisps.push({ x: (R() - 0.5) * 0.1, y: (R() - 0.5) * 0.04, h: 0.02, life: 1.3, r: (2 + R() * 4) * dpr, red: f[8] > 0 && R() < 0.5 });
+    if (!reduced && R() < dt * (f[7] > 0 ? 18 : 5) && wisps.length < 60) wisps.push({ x: (R() - 0.5) * 0.1, y: (R() - 0.5) * 0.04, h: 0.02, life: 1.3, r: (2 + R() * 4) * dpr, red: (charId === 1 ? water.rain > 0.1 || f[20] > 0 : f[8] > 0) && R() < 0.5 });
     for (let i = wisps.length - 1; i >= 0; i--) {
       const w = wisps[i]; w.life -= dt; w.h += dt * 0.09; w.x += Math.sin(time * 2 + i) * dt * 0.02;
       if (w.life <= 0) { wisps.splice(i, 1); continue; }
-      ctx.fillStyle = w.red ? `rgba(179,32,42,${w.life * 0.18})` : `rgba(22,20,18,${w.life * 0.08})`;
+      ctx.fillStyle = w.red ? (charId === 1 ? `rgba(47,107,255,${w.life * 0.16})` : `rgba(179,32,42,${w.life * 0.18})`) : `rgba(22,20,18,${w.life * 0.08})`;
       ctx.beginPath(); ctx.arc(toX(w.x, w.y), toY(w.y) - w.h * scale * dsz(w.y), w.r * (1.8 - w.life), 0, Math.PI * 2); ctx.fill();
     }
+    water.drawAir(ctx); ctx.setTransform(1, 0, 0, 1, sx, sy);
     // painted splatter bursts in the air at the point of impact
     if (art) for (let i = stamps.length - 1; i >= 0; i--) {
       const st = stamps[i];
@@ -823,7 +889,7 @@ export function createRenderer(canvas) {
       hurtFlash = Math.max(0, hurtFlash - dt * 2);
     }
     if (healFlash > 0) {
-      ctx.fillStyle = `rgba(179,32,42,${healFlash * 0.12})`; ctx.fillRect(0, 0, W, H);
+      ctx.fillStyle = charId === 1 ? `rgba(47,107,255,${healFlash * 0.1})` : `rgba(179,32,42,${healFlash * 0.12})`; ctx.fillRect(0, 0, W, H);
       healFlash = Math.max(0, healFlash - dt * 1.5);
     }
     stage.drawBanner(ctx, dtReal);
@@ -839,5 +905,7 @@ export function createRenderer(canvas) {
     get painted() { return !!art; },
     get stage() { return stage; },
     get powers() { return powers; },
+    get water() { return water; },
+    get charId() { return charId; },
   };
 }

@@ -81,7 +81,19 @@ export const MOVES = {
 };
 const POSE_K = { slam: 0.9, sweep: 1.0, tornado: 0.97, coil: 1.0 };
 
-export function createAsura() {
+// Palette/move-set options let other main characters reuse this animator:
+//   tint(fr): accent-coloured silhouette for crit echoes and ghost arms
+//   bead: flying bead colour; ribbon: sash/hair ribbon colours
+//   moves: move table; pool(ctx): optional move picker override
+export function createAsura(opts = {}) {
+  const P = {
+    tint: opts.tint || redOf,
+    bead: opts.bead || '#b3202a',
+    ribbon: opts.ribbon || ['rgba(165,28,36,.92)', 'rgba(140,22,30,.85)', 'rgba(22,20,18,.9)', 'rgba(22,20,18,.85)', 'rgba(30,27,24,.7)'],
+    moves: opts.moves || MOVES,
+    pick: opts.pick || null,
+    trailAll: !!opts.trailAll, // accent-coloured trails on every move (her water arcs)
+  };
   let now = 0, face = 1, cur = null, prev = null, hitstop = 0, critGlow = 0;
   let lastImpact = -9, lastN = 1, combo = 0, comboIdx = 0, recent = [];
   const trails = [], hist = [], beadHist = [], waves = [];
@@ -96,6 +108,7 @@ export function createAsura() {
   const minGapFor = (storm, arms) => (storm ? 0.2 : arms ? 0.24 : 0.3);
 
   function pick(tx, ty, range, storm, arms) {
+    if (P.pick) { combo = now - lastImpact < 1.1 ? combo + 1 : 0; return P.pick({ tx, ty, range, combo, lastN, recent, i: comboIdx++, SQ: S.SQ }); }
     const d = Math.hypot(tx, ty * S.SQ) || 1, r = Math.hypot(tx, ty) / (range || 1), vert = (ty * S.SQ) / d;
     let pool;
     if (arms) pool = ['palm', 'palm', 'uppercut', 'palm', 'backfist'];
@@ -112,12 +125,12 @@ export function createAsura() {
 
   const stats = { moves: 0, attacks: 0, snapped: 0, echoes: 0, fresh: 0, shiftMs: 0 };
   function start(name, D, t0, tx, ty) {
-    const M = MOVES[name]; stats.moves++;
+    const M = P.moves[name]; stats.moves++;
     const nf = Math.abs(tx) < 0.02 ? face : tx < 0 ? -1 : 1;
     if (cur) prev = { st: lastSt, until: now + 0.07 };
     const dx = tx, dy = ty * S.SQ, dd = Math.hypot(dx, dy) || 1;
     cur = { name, M, D, start: t0, impactT: t0 + M.imp * D, hitDone: false, f0: face, f1: nf, dir: [dx / dd, dy / dd],
-      tilt: clamp(Math.atan2(dy, Math.abs(dx)), -0.45, 0.45) * 0.8, red: !!M.trail.red, locked: false };
+      tilt: clamp(Math.atan2(dy, Math.abs(dx)), -0.45, 0.45) * 0.8, red: !!M.trail.red || P.trailAll, locked: false };
     face = nf;
     recent.unshift(name); recent.length = Math.min(recent.length, 3);
     if (M.trail) addTrail(M.trail, cur, false);
@@ -136,7 +149,7 @@ export function createAsura() {
     const hgt = -0.48 - Math.random() * 0.34, up = Math.random() < 0.5;
     const sp = up ? { cx: 0.2, cy: hgt, rx: 0.28, ry: 0.42, a0: PI * 0.6, a1: -PI * 0.5, t0: 0 }
       : { cx: 0.15, cy: hgt, rx: 0.55, ry: 0.16, a0: PI * 0.95, a1: 0.1, t0: 0 };
-    const m = { start: now, impactT: now + 0.06, D: 0.06, f1, tilt: clamp(Math.atan2(dy, Math.abs(dx)), -0.45, 0.45) * 0.8, red };
+    const m = { start: now, impactT: now + 0.06, D: 0.06, f1, tilt: clamp(Math.atan2(dy, Math.abs(dx)), -0.45, 0.45) * 0.8, red: red || P.trailAll };
     addTrail(sp, m, true);
   }
 
@@ -215,7 +228,7 @@ export function createAsura() {
     else if (tEnter < 0.6) { tNext = tEnter; tx = ex; ty = ey; best = 0; }
     if (best < 1e9 && (!cur || (cur.hitDone && !cur.locked))) {
       const name = peekName(tx, ty, range, storm, arms);
-      const D = dur(MOVES[name], aps, storm, arms), lead = MOVES[name].imp * D;
+      const D = dur(P.moves[name], aps, storm, arms), lead = P.moves[name].imp * D;
       if (tNext <= lead && now - lastImpact >= minGapFor(storm, arms) && (!cur || now - cur.impactT > 0.05)) {
         pick(tx, ty, range, storm, arms); // commit the combo step
         start(name, D, now - (lead - tNext), tx, ty);
@@ -245,7 +258,7 @@ export function createAsura() {
     } else if (!cur || now - lastImpact >= minGapFor(storm, arms)) {
       stats.fresh++;
       const name = pick(x, y, range, storm, arms);
-      const M = MOVES[name], D = dur(M, 4, storm, arms);
+      const M = P.moves[name], D = dur(M, 4, storm, arms);
       start(name, D, now - M.imp * D, x, y);
     } else {
       stats.echoes++;
@@ -296,7 +309,7 @@ export function createAsura() {
   // Wrath Burst: returns the delay (s) until the slam lands, so the renderer
   // can hold the shockwave/damage numbers for that beat.
   function castSlam() {
-    const M = MOVES.slam, D = S.reduced ? 0.6 : M.base;
+    const M = P.moves.slam, D = S.reduced ? 0.6 : M.base;
     start('slam', D, now, face * 0.1, 0.0001);
     cur.locked = true; cur.hitDone = true;
     lastImpact = cur.impactT;
@@ -308,7 +321,7 @@ export function createAsura() {
   function armGhost(fr) {
     if (fr.arm) return fr.arm;
     const c = document.createElement('canvas'); c.width = fr.w; c.height = fr.h;
-    const g = c.getContext('2d'); g.drawImage(redOf(fr), 0, 0);
+    const g = c.getContext('2d'); g.drawImage(P.tint(fr), 0, 0);
     const px = fr.beads ? fr.beads[0] : fr.w * 0.55, py = fr.beads ? fr.beads[1] : fr.h * 0.3;
     g.globalCompositeOperation = 'destination-in';
     const gx = g.createLinearGradient(px + fr.w * 0.02, 0, px + fr.w * 0.2, 0);
@@ -373,7 +386,7 @@ export function createAsura() {
   function drawRibbons(ctx) {
     if (!ribbons) return;
     const H = S.H;
-    const col = ['rgba(165,28,36,.92)', 'rgba(140,22,30,.85)', 'rgba(22,20,18,.9)', 'rgba(22,20,18,.85)', 'rgba(30,27,24,.7)'];
+    const col = P.ribbon;
     const w0 = [0.03, 0.022, 0.018, 0.014, 0.012];
     ribbons.forEach((pts, k) => brush(ctx, pts.map((p) => [p.x, p.y]), w0[k] * H, 0.003 * H, col[k], 0.4));
   }
@@ -462,13 +475,13 @@ export function createAsura() {
       drawPose(ctx, st2, frameFor(getPose, st.next), st.mix);
     } else drawPose(ctx, st, fr, 1);
     // crit: a single red-ink impact echo, stretched along the strike
-    if (critGlow > 0.6 && !S.reduced && cur) drawPose(ctx, { ...st, sx: st.sx * (1 + (1 - critGlow) * 0.5) }, fr, (critGlow - 0.6) * 0.5, redOf(fr));
+    if (critGlow > 0.6 && !S.reduced && cur) drawPose(ctx, { ...st, sx: st.sx * (1 + (1 - critGlow) * 0.5) }, fr, (critGlow - 0.6) * 0.5, P.tint(fr));
 
     // flying mala beads during spins
     const bp = fr.beads ? toScreen(st, fr, fr.beads) : null;
     if (bp) { beadHist.push(bp); if (beadHist.length > 7) beadHist.shift(); }
     if (!S.reduced && st.spinV > 0.25 && beadHist.length > 4) {
-      ctx.fillStyle = '#b3202a';
+      ctx.fillStyle = P.bead;
       for (let i = 0; i < beadHist.length - 1; i++) {
         const p = beadHist[i], q = (i + 1) / beadHist.length;
         ctx.globalAlpha = q * 0.8;
@@ -485,9 +498,9 @@ export function createAsura() {
 
   // harness hook for the contact sheet: play one move toward (tx, ty)
   function debugPlay(name, tx = 0.3, ty = 0, D) {
-    const M = MOVES[name]; cur = null; face = 1;
+    const M = P.moves[name]; cur = null; face = 1;
     start(name, D || M.base, now, tx, ty);
     if (name === 'slam') cur.locked = true;
   }
-  return { update, draw, onAttack, onCrit, castSlam, debugPlay, get now() { return now; }, get busy() { return !!cur; }, get pose() { return lastSt; }, stats, MOVES };
+  return { update, draw, onAttack, onCrit, castSlam, debugPlay, get now() { return now; }, get busy() { return !!cur; }, get pose() { return lastSt; }, stats, MOVES: P.moves };
 }

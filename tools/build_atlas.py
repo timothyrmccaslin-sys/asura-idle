@@ -26,7 +26,7 @@ def key(path, report=None):
     if len(ys) and not os.path.basename(path).startswith('fx_'):
         y0, y1 = ys.min(), ys.max(); h = y1 - y0
         b = os.path.basename(path)
-        if b.startswith('a_') or b.split('_')[0] in ('e0', 'e1', 'e2', 'e3', 'e4', 'e7', 'e8', 'e11'):
+        if b.startswith('a_') or b.startswith('d_') or b.split('_')[0] in ('e0', 'e1', 'e2', 'e3', 'e4', 'e7', 'e8', 'e11'):
             # figures with no painted-white cloth/feathers (the Asura, ashigaru, ninja,
             # kappa, ronin, samurai, oni, oni warlord, orochi): paper pockets trapped between hair
             # strands, sash tails and motion swirls go everywhere (dense face/teeth stay)
@@ -44,6 +44,10 @@ def crop(img,pad=4):
 def red_mask(img):
     a=np.asarray(img).astype(np.int32); r,g,b,al=a[...,0],a[...,1],a[...,2],a[...,3]
     return (al>128)&(r>95)&(r>g*1.6)&(r>b*1.5)
+
+def blue_mask(img):
+    a=np.asarray(img).astype(np.int32); r,g,b,al=a[...,0],a[...,1],a[...,2],a[...,3]
+    return (al>128)&(b>110)&(b>r*1.6)&(b>g*1.25)
 
 def baseline(img):
     a=np.asarray(img)[...,3]>128
@@ -68,6 +72,27 @@ for p in sorted(glob.glob(SRC+'/a_*.jpg')):
     sash=(float(xs[lo].mean()),float(ys[lo].mean())); beads=(float(xs[hi].mean()),float(ys[hi].mean()))
     by=baseline(c)
     add('A_'+name,c,sash[0],by,{'sash':sash,'beads':beads,'head':(beads[0]+4,beads[1]-(sash[1]-beads[1])*0.35)})
+
+# ---------------- Daeva poses: same pipeline, blue accents (sash below, beads above)
+for p in sorted(glob.glob(SRC+'/d_*.jpg')):
+    name=os.path.basename(p)[2:-4]
+    k=key(p); k=k.resize((round(k.width*S_A*0.97),round(k.height*S_A*0.97)),Image.LANCZOS)
+    c,_=crop(k)
+    bm=blue_mask(c); al=np.asarray(c)[...,3].astype(np.float32)/255
+    by=baseline(c); rows=np.where(al.max(axis=1)>0.5)[0]; top=rows.min(); hh=by-top
+    # torso column: alpha-weighted median x of the dense waist band (sash tails,
+    # hair and kicking legs pull a plain centroid sideways)
+    band=al[int(top+hh*0.40):int(top+hh*0.58)]*(al[int(top+hh*0.40):int(top+hh*0.58)]>0.8)
+    colw=band.sum(axis=0); cs=np.cumsum(colw); tx=float(np.searchsorted(cs,cs[-1]/2))
+    ys,xs=np.where(bm)
+    near=np.abs(xs-tx)<c.width*0.14
+    lo=(ys>top+hh*0.38)&(ys<top+hh*0.66)&near
+    hi=(ys>top+hh*0.12)&(ys<=top+hh*0.38)&near
+    sy=float(np.median(ys[lo])) if lo.sum()>30 else top+hh*0.5
+    ny=float(np.median(ys[hi])) if hi.sum()>20 else top+hh*0.3
+    nx=float(np.median(xs[hi])) if hi.sum()>20 else tx
+    sash=(tx,sy); beads=(nx,ny)
+    add('D_'+name,c,sash[0],by,{'sash':sash,'beads':beads,'head':(beads[0]+4,beads[1]-(sash[1]-beads[1])*0.35)})
 
 # ---------------- enemies & bosses: normalised height
 H={0:236,1:220,2:196,3:236,4:240,5:240,6:236,7:250,8:400,9:400,10:400,11:400,12:400}
@@ -118,11 +143,12 @@ def pack(names,file,maxw=2048):
 ma,sa=pack([n for n in frames if n.startswith('A_')],'asura.webp')
 me,se=pack([n for n in frames if n.startswith('E')],'foes.webp')
 mf,sf=pack([n for n in frames if n.startswith('FX_')],'fx.webp',1024)
-meta={'asura':{'file':'asura.webp','size':sa,'frames':ma},'foes':{'file':'foes.webp','size':se,'frames':me},'fx':{'file':'fx.webp','size':sf,'frames':mf}}
+md,sd=pack([n for n in frames if n.startswith('D_')],'daeva.webp')
+meta={'asura':{'file':'asura.webp','size':sa,'frames':ma},'daeva':{'file':'daeva.webp','size':sd,'frames':md},'foes':{'file':'foes.webp','size':se,'frames':me},'fx':{'file':'fx.webp','size':sf,'frames':mf}}
 json.dump(meta,open(OUT+'/atlas.json','w'),indent=1)
-for f in ('asura.webp','foes.webp','fx.webp'): print(f,os.path.getsize(OUT+'/'+f)//1024,'KB', Image.open(OUT+'/'+f).size)
+for f in ('asura.webp','daeva.webp','foes.webp','fx.webp'): print(f,os.path.getsize(OUT+'/'+f)//1024,'KB', Image.open(OUT+'/'+f).size)
 # previews on dark + paper backgrounds to check for halos
-for f in ('asura.webp','foes.webp'):
+for f in ('asura.webp','daeva.webp','foes.webp'):
     a=Image.open(OUT+'/'+f)
     for bg,nm in [((40,40,60,255),'dark'),((236,230,216,255),'paper')]:
         b=Image.new('RGBA',a.size,bg); b.alpha_composite(a); b.convert('RGB').save(os.path.join(SRC,'preview-%s-%s.jpg'%(f[:-5],nm)),quality=85)

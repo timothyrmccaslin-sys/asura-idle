@@ -57,6 +57,7 @@
     <nav class="tabs" role="tablist">
       <button role="tab" class="tab active" data-tab="up" aria-selected="true">Upgrades</button>
       <button role="tab" class="tab" data-tab="rebirth" aria-selected="false">Rebirth</button>
+      <button role="tab" class="tab" data-tab="chars" aria-selected="false">Characters</button>
       <button role="tab" class="tab" data-tab="scroll" aria-selected="false">Scroll</button>
     </nav>
 
@@ -86,8 +87,14 @@
       <div id="shop-list" class="cards"></div>
     </div>
 
+    <div class="tab-body" data-body="chars" hidden>
+      <div class="panel-label inline">— Characters —</div>
+      <p class="flav">Souls, waves, upgrades and beads are shared. Each champion brings their own fighting style and four abilities. Switching resets ability cooldowns.</p>
+      <div id="char-list" class="char-list"></div>
+    </div>
+
     <div class="tab-body" data-body="scroll" hidden>
-      <div class="panel-label inline">— Asura Stats —</div>
+      <div class="panel-label inline" id="stats-label">— Asura Stats —</div>
       <dl id="stat-list" class="stats"></dl>
       <div class="panel-label inline">— Options —</div>
       <div class="opts">

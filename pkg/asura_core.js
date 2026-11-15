@@ -71,6 +71,13 @@ export class Game {
     /**
      * @returns {number}
      */
+    char_id() {
+        const ret = wasm.game_char_id(this.__wbg_ptr);
+        return ret >>> 0;
+    }
+    /**
+     * @returns {number}
+     */
     crit_chance() {
         const ret = wasm.game_crit_chance(this.__wbg_ptr);
         return ret;
@@ -278,6 +285,16 @@ export class Game {
      */
     set_autocast(on) {
         wasm.game_set_autocast(this.__wbg_ptr, on);
+    }
+    /**
+     * Make `id` the active character (must be unlocked). Ongoing ability
+     * effects end and the new character's four abilities start ready.
+     * @param {number} id
+     * @returns {boolean}
+     */
+    set_char(id) {
+        const ret = wasm.game_set_char(this.__wbg_ptr, id);
+        return ret !== 0;
     }
     /**
      * @returns {number}

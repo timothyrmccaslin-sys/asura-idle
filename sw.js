@@ -1,13 +1,13 @@
 // Asura service worker — precaches the app shell so the game runs fully offline.
 // Bump VERSION on every release; the page shows "New version, tap to refresh".
 // Saves live in localStorage, which this worker never touches.
-const VERSION = 'asura-3.2.3';
+const VERSION = 'asura-3.3.0';
 // later stage themes are fetched lazily by the game and cached on first use; they are
 // also warmed in the background after activation so the whole game works offline
 const THEMES_LATER = ['tengu', 'shogun', 'orochi', 'onryo'].flatMap((t) => [`./assets/themes/${t}-bg.webp`, `./assets/themes/${t}-props.webp`]);
 const SHELL = [
-  './', './index.html', './style.css', './main.js', './render.js', './figures.js', './art.js', './asura.js', './stage.js', './powers.js', './cam.js', './foes.js', './weather.js',
-  './assets/art/atlas.json', './assets/art/asura.webp', './assets/art/foes.webp', './assets/art/fx.webp',
+  './', './index.html', './style.css', './main.js', './render.js', './figures.js', './art.js', './asura.js', './stage.js', './powers.js', './cam.js', './foes.js', './weather.js', './daeva.js',
+  './assets/art/atlas.json', './assets/art/asura.webp', './assets/art/foes.webp', './assets/art/fx.webp', './assets/art/daeva.webp', './assets/chars/asura.webp', './assets/chars/daeva.webp',
   './assets/themes/themes.json', './assets/themes/oni-bg.webp', './assets/themes/oni-props.webp',
   './pkg/asura_core.js', './pkg/asura_core_bg.wasm',
   './fonts/permanentmarker.woff2', './fonts/patrickhandsc.woff2', './fonts/yujisyuku-kanji.woff2',

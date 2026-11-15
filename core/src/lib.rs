@@ -66,6 +66,11 @@ pub const EV_DEFEAT: f64 = 8.0;
 pub const EV_BOSS: f64 = 9.0;
 pub const EV_HEAL: f64 = 10.0;
 pub const EV_CAST: f64 = 11.0;
+pub const EV_TIDE: f64 = 12.0; // Daeva Tidal Surge: a = radius
+pub const EV_DROP: f64 = 13.0; // Healing Rain droplet strike at (x, y)
+pub const EV_UNLOCK: f64 = 14.0; // a = character id newly unlocked
+pub const EV_SWITCH: f64 = 15.0; // a = character id now active
+pub const EV_POOL: f64 = 16.0; // Whirlpool opened at (x, y), a = radius
 
 struct UpDef {
     key: &'static str,
@@ -111,12 +116,42 @@ struct AbDef {
     dur: f64,
 }
 
-const ABS: [AbDef; N_AB] = [
-    AbDef { key: "wrath", unlock: 5, cd: 30.0, dur: 0.0 },
-    AbDef { key: "storm", unlock: 15, cd: 60.0, dur: 8.0 },
-    AbDef { key: "beads", unlock: 25, cd: 90.0, dur: 15.0 },
-    AbDef { key: "sixarms", unlock: 40, cd: 120.0, dur: 10.0 },
+// ---------------------------------------------------------------- characters
+// Data-driven roster: each main character has a key, a first-unlock wave and
+// four abilities. Progress (wave, souls, upgrades, beads, rebirth) is shared;
+// the active character changes visuals, attack style and abilities.
+struct CharDef {
+    key: &'static str,
+    unlock: u32,
+    dmg: f64,   // basic-attack damage multiplier
+    regen: f64, // regen multiplier
+    abs: [AbDef; N_AB],
+}
+pub const N_CHARS: usize = 2;
+pub const CH_ASURA: u32 = 0;
+pub const CH_DAEVA: u32 = 1;
+const CHARS: [CharDef; N_CHARS] = [
+    CharDef {
+        key: "asura", unlock: 0, dmg: 1.0, regen: 1.0,
+        abs: [
+            AbDef { key: "wrath", unlock: 5, cd: 30.0, dur: 0.0 },
+            AbDef { key: "storm", unlock: 15, cd: 60.0, dur: 8.0 },
+            AbDef { key: "beads", unlock: 25, cd: 90.0, dur: 15.0 },
+            AbDef { key: "sixarms", unlock: 40, cd: 120.0, dur: 10.0 },
+        ],
+    },
+    // Daeva: trades some burst for sustain and control
+    CharDef {
+        key: "daeva", unlock: 50, dmg: 0.85, regen: 1.6,
+        abs: [
+            AbDef { key: "tide", unlock: 5, cd: 30.0, dur: 0.0 },
+            AbDef { key: "rain", unlock: 15, cd: 60.0, dur: 10.0 },
+            AbDef { key: "whirlpool", unlock: 25, cd: 75.0, dur: 8.0 },
+            AbDef { key: "lotus", unlock: 40, cd: 100.0, dur: 12.0 },
+        ],
+    },
 ];
+
 
 #[derive(Clone, Copy)]
 struct Kind {
@@ -197,6 +232,10 @@ pub struct Save {
     pub rate_wave: u32,
     pub last_save: f64,
     pub created: f64,
+    /// active main character (0 Asura, 1 Daeva); old saves default to the Asura
+    pub ch: u32,
+    /// bitmask of unlocked characters (bit 0 = Asura, always set)
+    pub unlocked: u32,
 }
 
 impl Default for Save {
@@ -224,6 +263,8 @@ impl Default for Save {
             rate_wave: 0,
             last_save: 0.0,
             created: 0.0,
+            ch: 0,
+            unlocked: 1,
         }
     }
 }
@@ -263,6 +304,11 @@ impl Save {
         self.wave = self.wave.max(1);
         self.max_wave = self.max_wave.max(self.wave);
         self.best_wave = self.best_wave.max(self.max_wave);
+        self.unlocked |= 1;
+        for (i, c) in CHARS.iter().enumerate() {
+            if self.best_wave >= c.unlock { self.unlocked |= 1 << i; }
+        }
+        if self.ch as usize >= N_CHARS || self.unlocked & (1 << self.ch) == 0 { self.ch = 0; }
         self.v = SAVE_VERSION;
     }
 }
@@ -309,6 +355,12 @@ pub struct Game {
     win_souls: f64,
     win_kills: f64,
     wave_intro: f64,
+    // Daeva ability state
+    pool: (f64, f64),
+    pool_r: f64,
+    rain_acc: f64,
+    pool_acc: f64,
+    lotus_acc: f64,
 }
 
 #[wasm_bindgen]
@@ -335,6 +387,11 @@ impl Game {
             win_souls: 0.0,
             win_kills: 0.0,
             wave_intro: 0.0,
+            pool: (0.0, 0.0),
+            pool_r: 0.0,
+            rain_acc: 0.0,
+            pool_acc: 0.0,
+            lotus_acc: 0.0,
         };
         g.hp = g.max_hp();
         g.start_wave();
@@ -350,7 +407,7 @@ impl Game {
         let l = self.s.up[8] as f64;
         let mut m = (1.0 + 0.2 * l) * 1.01f64.powf(l);
         m *= (1.0 + 0.02 * self.s.beads_life) * (1.0 + 0.35 * self.s.shop[1] as f64);
-        if self.active[2] > 0.0 {
+        if self.asura() && self.active[2] > 0.0 {
             m *= 2.0;
         }
         m
@@ -358,15 +415,15 @@ impl Game {
     pub fn damage(&self) -> f64 {
         let l = self.s.up[0] as f64;
         let mut d = 5.0 * (1.0 + l) * 1.07f64.powf(l) * 2f64.powi((self.s.up[0] / 25) as i32);
-        d *= self.bead_dmg_mult();
-        if self.active[3] > 0.0 {
+        d *= self.bead_dmg_mult() * CHARS[self.s.ch as usize].dmg;
+        if self.asura() && self.active[3] > 0.0 {
             d *= 2.0;
         }
         d
     }
     pub fn attack_speed(&self) -> f64 {
         let mut a = (1.0 + 0.075 * self.s.up[1] as f64) * (1.0 + 0.06 * self.s.shop[3] as f64);
-        if self.active[1] > 0.0 {
+        if self.asura() && self.active[1] > 0.0 {
             a *= 2.5;
         }
         a
@@ -381,7 +438,7 @@ impl Game {
         2.0 + 0.15 * self.s.up[4] as f64
     }
     pub fn targets(&self) -> u32 {
-        1 + self.s.up[5] + if self.active[3] > 0.0 { 5 } else { 0 }
+        1 + self.s.up[5] + if self.asura() && self.active[3] > 0.0 { 5 } else { 0 }
     }
     pub fn max_hp(&self) -> f64 {
         let l = self.s.up[6] as f64;
@@ -389,10 +446,47 @@ impl Game {
     }
     pub fn regen(&self) -> f64 {
         let frac = (0.005 + 0.001 * self.s.up[7] as f64).min(0.03);
-        self.max_hp() * frac
+        self.max_hp() * frac * CHARS[self.s.ch as usize].regen
     }
     pub fn siphon(&self) -> f64 {
         0.005 * self.s.up[9] as f64
+    }
+    fn asura(&self) -> bool {
+        self.s.ch == CH_ASURA
+    }
+    fn daeva(&self) -> bool {
+        self.s.ch == CH_DAEVA
+    }
+    fn ab(&self, i: usize) -> &'static AbDef {
+        &CHARS[self.s.ch as usize].abs[i]
+    }
+    fn check_unlocks(&mut self) {
+        for (i, c) in CHARS.iter().enumerate() {
+            if self.s.best_wave >= c.unlock && self.s.unlocked & (1 << i) == 0 {
+                self.s.unlocked |= 1 << i;
+                self.push_ev(EV_UNLOCK, 0.0, 0.0, i as f64, 0.0, 0.0);
+            }
+        }
+    }
+    /// Make `id` the active character (must be unlocked). Ongoing ability
+    /// effects end and the new character's four abilities start ready.
+    pub fn set_char(&mut self, id: u32) -> bool {
+        if id as usize >= N_CHARS || self.s.unlocked & (1 << id) == 0 {
+            return false;
+        }
+        if id != self.s.ch {
+            let frac = (self.hp / self.max_hp()).clamp(0.0, 1.0);
+            self.s.ch = id;
+            self.s.cds = vec![0.0; N_AB];
+            self.active = [0.0; N_AB];
+            self.pool_r = 0.0;
+            self.hp = self.max_hp() * frac;
+            self.push_ev(EV_SWITCH, 0.0, 0.0, id as f64, 0.0, 0.0);
+        }
+        true
+    }
+    pub fn char_id(&self) -> u32 {
+        self.s.ch
     }
     fn cd_mult(&self) -> f64 {
         1.0 - 0.06 * self.s.shop[6] as f64
@@ -532,10 +626,11 @@ impl Game {
         }
         if self.s.autocast {
             for i in 0..N_AB {
-                if self.can_cast(i) && (i != 0 || !self.enemies.is_empty()) && (i != 2 || self.hp < self.max_hp() * 0.6 || !self.enemies.is_empty()) {
+                let sustain = if self.asura() { i == 2 } else { i == 1 || i == 3 };
+                if self.can_cast(i) && (i != 0 || !self.enemies.is_empty()) && (!sustain || self.hp < self.max_hp() * 0.6 || !self.enemies.is_empty()) {
                     // only cast offensive skills when foes are near
                     let near = self.enemies.iter().any(|e| (e.x * e.x + e.y * e.y).sqrt() < self.range() * 1.4);
-                    if near || i == 2 {
+                    if near || sustain {
                         self.cast(i as u32);
                     }
                 }
@@ -581,6 +676,10 @@ impl Game {
                 }
                 self.spawn_timer = self.spawn_interval() * (0.7 + self.rng.next() * 0.6);
             }
+        }
+
+        if self.daeva() {
+            self.daeva_step(dt);
         }
 
         // regen
@@ -638,6 +737,10 @@ impl Game {
             }
         }
         if hurt > 0.0 {
+            // Blue Lotus Beads shield the Daeva
+            if self.daeva() && self.active[3] > 0.0 {
+                hurt *= 0.4;
+            }
             self.hp -= hurt;
             self.push_ev(EV_HURT, 0.0, 0.0, hurt, 0.0, 0.0);
             if self.hp <= 0.0 {
@@ -673,6 +776,7 @@ impl Game {
                 if self.s.max_wave > self.s.best_wave {
                     self.s.best_wave = self.s.max_wave;
                 }
+                self.check_unlocks();
             }
             self.start_wave();
         }
@@ -733,9 +837,14 @@ impl Game {
             let idx = cands[t].1;
             let (amt, crit) = self.roll_hit(base);
             self.damage_enemy(idx, amt, crit, 0.0);
+            if self.daeva() {
+                // her water-palm strikes leave foes briefly sluggish
+                let e = &mut self.enemies[idx];
+                e.slow = e.slow.max(0.5);
+            }
         }
         // Storm: lightning chains to a foe anywhere on the field
-        if self.active[1] > 0.0 {
+        if self.asura() && self.active[1] > 0.0 {
             let alive: Vec<usize> = (0..self.enemies.len())
                 .filter(|&i| self.enemies[i].hp > 0.0 && (self.enemies[i].x.powi(2) + self.enemies[i].y.powi(2)).sqrt() < 1.25)
                 .collect();
@@ -783,7 +892,7 @@ impl Game {
     // ------------------------------------------------------------ abilities
 
     pub fn can_cast(&self, i: usize) -> bool {
-        i < N_AB && self.s.best_wave >= ABS[i].unlock && self.s.cds[i] <= 0.0
+        i < N_AB && self.s.best_wave >= self.ab(i).unlock && self.s.cds[i] <= 0.0
     }
 
     pub fn cast(&mut self, i: u32) -> bool {
@@ -791,9 +900,13 @@ impl Game {
         if !self.can_cast(i) {
             return false;
         }
-        self.s.cds[i] = ABS[i].cd * self.cd_mult();
-        self.active[i] = ABS[i].dur;
-        self.push_ev(EV_CAST, 0.0, 0.0, i as f64, 0.0, 0.0);
+        self.s.cds[i] = self.ab(i).cd * self.cd_mult();
+        self.active[i] = self.ab(i).dur;
+        self.push_ev(EV_CAST, 0.0, 0.0, i as f64, self.s.ch as f64, 0.0);
+        if self.daeva() {
+            self.daeva_cast(i);
+            return true;
+        }
         match i {
             0 => {
                 // Wrath Burst — radial shockwave
@@ -1105,9 +1218,9 @@ impl Game {
             self.s.wave as f64,
             self.wave_killed as f64,
             self.wave_total as f64,
-            self.active[1],
-            self.active[2],
-            self.active[3],
+            if self.asura() { self.active[1] } else { 0.0 },
+            if self.asura() { self.active[2] } else { 0.0 },
+            if self.asura() { self.active[3] } else { 0.0 },
             self.wave_intro.max(0.0),
             self.s.souls,
             if self.is_boss_wave() { 1.0 } else { 0.0 },
@@ -1115,6 +1228,14 @@ impl Game {
             self.max_hp(),
             self.atk_timer.clamp(0.0, 1.0),
             self.attack_speed(),
+            // 17.. character & Daeva effects: [char, rainLeft, poolLeft, lotusLeft, poolX, poolY, poolR]
+            self.s.ch as f64,
+            if self.daeva() { self.active[1] } else { 0.0 },
+            if self.daeva() { self.active[2] } else { 0.0 },
+            if self.daeva() { self.active[3] } else { 0.0 },
+            self.pool.0,
+            self.pool.1,
+            self.pool_r,
         ]
     }
 
@@ -1150,7 +1271,7 @@ impl Game {
             .collect();
         let abs: Vec<serde_json::Value> = (0..N_AB)
             .map(|i| {
-                let d = &ABS[i];
+                let d = self.ab(i);
                 serde_json::json!({
                     "key": d.key, "unlock": d.unlock, "unlocked": self.s.best_wave >= d.unlock,
                     "cd": self.s.cds[i], "cdMax": d.cd * self.cd_mult(), "active": self.active[i], "dur": d.dur,
@@ -1158,6 +1279,10 @@ impl Game {
             })
             .collect();
         let (sps, _) = self.estimate_rates();
+        let chars: Vec<serde_json::Value> = CHARS.iter().enumerate().map(|(i, c)| {
+            let abs: Vec<serde_json::Value> = c.abs.iter().map(|a| serde_json::json!({"key": a.key, "unlock": a.unlock, "cd": a.cd, "dur": a.dur})).collect();
+            serde_json::json!({ "id": i, "key": c.key, "unlock": c.unlock, "unlocked": self.s.unlocked & (1 << i) != 0, "abs": abs })
+        }).collect();
         serde_json::json!({
             "souls": self.s.souls, "beads": self.s.beads, "beadsLife": self.s.beads_life,
             "wave": self.s.wave, "maxWave": self.s.max_wave, "bestWave": self.s.best_wave,
@@ -1170,6 +1295,8 @@ impl Game {
             "siphon": self.siphon(), "beadDmg": self.bead_dmg_mult(),
             "offlineEff": self.offline_eff(), "offlineCap": self.offline_cap(), "cdMult": self.cd_mult(),
             "sps": sps, "ups": ups, "shop": shop, "abs": abs,
+            "char": CHARS[self.s.ch as usize].key, "charId": self.s.ch,
+            "chars": chars,
         })
         .to_string()
     }
@@ -1195,6 +1322,11 @@ impl Game {
             win_souls: 0.0,
             win_kills: 0.0,
             wave_intro: 0.0,
+            pool: (0.0, 0.0),
+            pool_r: 0.0,
+            rain_acc: 0.0,
+            pool_acc: 0.0,
+            lotus_acc: 0.0,
         }
     }
 
@@ -1272,7 +1404,153 @@ impl Game {
         self.s.wave = w.max(1);
         self.s.max_wave = self.s.max_wave.max(self.s.wave);
         self.s.best_wave = self.s.best_wave.max(self.s.max_wave);
+        self.check_unlocks();
         self.start_wave();
+    }
+}
+
+// ---------------------------------------------------------------- Daeva
+impl Game {
+    fn daeva_cast(&mut self, i: usize) {
+        match i {
+            0 => {
+                // Tidal Surge — a radial wave of ink-water: less burst than Wrath,
+                // but it shoves foes far back and leaves them slowed
+                let radius = self.range() * 1.8;
+                self.push_ev(EV_TIDE, 0.0, 0.0, radius, 0.0, 0.0);
+                let base = self.damage() * 10.0;
+                for idx in 0..self.enemies.len() {
+                    let (x, y) = (self.enemies[idx].x, self.enemies[idx].y);
+                    let d = (x * x + y * y).sqrt().max(1e-6);
+                    if d <= radius {
+                        let (amt, crit) = self.roll_hit(base);
+                        self.damage_enemy(idx, amt, crit, 3.0);
+                        let e = &mut self.enemies[idx];
+                        let push = if e.boss { 0.05 } else { 0.3 };
+                        let nd = (d + push).min(SPAWN_RADIUS);
+                        let (nx, ny) = clear_cone(x / d * nd, y / d * nd);
+                        e.x = nx;
+                        e.y = ny;
+                        e.slow = 4.0;
+                    }
+                }
+                self.reap();
+            }
+            1 => {
+                // Healing Rain — opens with a small heal; the rest ticks in daeva_step
+                let mh = self.max_hp();
+                let heal = mh * 0.1;
+                self.hp = (self.hp + heal).min(mh);
+                self.push_ev(EV_HEAL, 0.0, 0.0, heal, 0.0, 0.0);
+                self.rain_acc = 0.0;
+            }
+            2 => {
+                // Whirlpool — opens on the densest knot of foes in reach
+                let reach = self.range() * 1.6;
+                let mut best = (0.0f64, 0.0f64, -1.0f64);
+                for a in &self.enemies {
+                    let da = (a.x * a.x + a.y * a.y).sqrt();
+                    if da > reach || da < 0.12 {
+                        continue;
+                    }
+                    let n = self.enemies.iter().filter(|b| (b.x - a.x).powi(2) + (b.y - a.y).powi(2) < 0.09).count() as f64 - da * 0.5;
+                    if n > best.2 {
+                        best = (a.x, a.y, n);
+                    }
+                }
+                if best.2 < 0.0 {
+                    best = (self.face * self.range() * 0.6, 0.0, 0.0);
+                }
+                self.pool = (best.0, best.1);
+                self.pool_r = 0.3;
+                self.pool_acc = 0.0;
+                self.push_ev(EV_POOL, best.0, best.1, self.pool_r, 0.0, 0.0);
+            }
+            3 => {
+                // Blue Lotus Beads — orbiting beads that heal per hit and shield her
+                let mh = self.max_hp();
+                let heal = mh * 0.2;
+                self.hp = (self.hp + heal).min(mh);
+                self.push_ev(EV_HEAL, 0.0, 0.0, heal, 1.0, 0.0);
+                self.lotus_acc = 0.0;
+            }
+            _ => {}
+        }
+    }
+
+    fn daeva_step(&mut self, dt: f64) {
+        let mh = self.max_hp();
+        let base = self.damage();
+        // Healing Rain: 4% max HP per second; droplets strike foes on the field
+        if self.active[1] > 0.0 {
+            self.hp = (self.hp + mh * 0.04 * dt).min(mh);
+            self.rain_acc += dt;
+            while self.rain_acc >= 0.2 {
+                self.rain_acc -= 0.2;
+                let alive: Vec<usize> = (0..self.enemies.len())
+                    .filter(|&i| self.enemies[i].hp > 0.0 && (self.enemies[i].x.powi(2) + self.enemies[i].y.powi(2)).sqrt() < 1.2)
+                    .collect();
+                if alive.is_empty() {
+                    break;
+                }
+                let pick = alive[(self.rng.next() * alive.len() as f64) as usize % alive.len()];
+                let (amt, crit) = self.roll_hit(base * 0.7);
+                let (tx, ty) = (self.enemies[pick].x, self.enemies[pick].y);
+                self.push_ev(EV_DROP, tx, ty, 0.0, 0.0, 0.0);
+                self.damage_enemy(pick, amt, crit, 3.0);
+            }
+        }
+        // Whirlpool: pull foes in and grind them
+        if self.active[2] > 0.0 && self.pool_r > 0.0 {
+            let (cx, cy, r) = (self.pool.0, self.pool.1, self.pool_r);
+            for e in self.enemies.iter_mut() {
+                let (dx, dy) = (cx - e.x, cy - e.y);
+                let d = (dx * dx + dy * dy).sqrt();
+                if d < r * 1.6 && d > 1e-4 {
+                    let pull = if e.boss { 0.06 } else { 0.32 } * dt;
+                    let mv = pull.min(d * 0.9);
+                    // swirl: mostly inward with a tangential twist
+                    e.x += (dx / d) * mv - (dy / d) * mv * 0.6;
+                    e.y += (dy / d) * mv + (dx / d) * mv * 0.6;
+                    e.slow = e.slow.max(0.3);
+                }
+            }
+            self.pool_acc += dt;
+            while self.pool_acc >= 0.25 {
+                self.pool_acc -= 0.25;
+                for idx in 0..self.enemies.len() {
+                    let e = &self.enemies[idx];
+                    if e.hp > 0.0 && (e.x - cx).powi(2) + (e.y - cy).powi(2) < r * r {
+                        let (amt, crit) = self.roll_hit(base * 0.55);
+                        self.damage_enemy(idx, amt, crit, 4.0);
+                    }
+                }
+            }
+        } else if self.active[2] <= 0.0 {
+            self.pool_r = 0.0;
+        }
+        // Blue Lotus Beads: hits foes the orbit sweeps through; each hit heals
+        if self.active[3] > 0.0 {
+            self.lotus_acc += dt;
+            while self.lotus_acc >= 0.25 {
+                self.lotus_acc -= 0.25;
+                let mut healed = 0.0;
+                for idx in 0..self.enemies.len() {
+                    let e = &self.enemies[idx];
+                    let d = (e.x * e.x + e.y * e.y).sqrt();
+                    if e.hp > 0.0 && d < 0.3 + e.size * 0.3 {
+                        let (amt, crit) = self.roll_hit(base * 0.6);
+                        self.damage_enemy(idx, amt, crit, 5.0);
+                        healed += mh * 0.004;
+                    }
+                }
+                let healed = healed.min(mh * 0.03);
+                if healed > 0.0 {
+                    self.hp = (self.hp + healed).min(mh);
+                }
+            }
+        }
+        self.reap();
     }
 }
 
@@ -1332,6 +1610,61 @@ mod tests {
     }
 
     #[test]
+    fn characters_unlock_switch_persist() {
+        let mut g = Game::new(9.0);
+        assert_eq!(g.s.ch, 0);
+        assert!(!g.set_char(1), "Daeva is locked before wave 50");
+        g.debug_set_wave(50);
+        assert!(g.s.unlocked & 2 != 0);
+        g.s.cds = vec![10.0; N_AB];
+        assert!(g.set_char(1));
+        assert_eq!(g.s.cds, vec![0.0; N_AB], "cooldowns reset on switch");
+        let j = g.save_json(1.0);
+        let mut h = Game::new(1.0);
+        assert!(h.load_json(&j));
+        assert_eq!(h.s.ch, 1);
+        // old saves (no ch/unlocked fields) default to the Asura, but unlock by best wave
+        let mut o = Game::new(2.0);
+        assert!(o.load_json(r#"{"v":1,"souls":5,"wave":12,"best_wave":12}"#));
+        assert_eq!(o.s.ch, 0);
+        assert_eq!(o.s.unlocked, 1);
+        assert!(o.load_json(r#"{"v":1,"souls":5,"wave":60,"best_wave":72}"#));
+        assert_eq!(o.s.unlocked & 2, 2, "best wave >= 50 unlocks her immediately");
+    }
+
+    #[test]
+    fn daeva_abilities_work() {
+        let mut g = Game::new(11.0);
+        g.debug_set_wave(60);
+        assert!(g.set_char(1));
+        for _ in 0..30 { for k in 0..10 { g.buy(k, 1); } }
+        g.debug_set_souls(1e30);
+        for _ in 0..60 { for k in 0..10 { g.buy(k, 3); } }
+        for _ in 0..300 { g.tick(1.0 / 30.0); }
+        // Tidal Surge pushes foes back and slows them
+        let before: Vec<(u32, f64)> = g.enemies.iter().map(|e| (e.id, (e.x * e.x + e.y * e.y).sqrt())).collect();
+        assert!(g.cast(0));
+        let moved = g.enemies.iter().filter(|e| e.slow > 3.0 && before.iter().any(|(id, d)| *id == e.id && (e.x * e.x + e.y * e.y).sqrt() > *d)).count();
+        assert!(g.enemies.is_empty() || moved > 0, "tide pushed foes");
+        // Healing Rain heals over time
+        g.hp = g.max_hp() * 0.3;
+        let h0 = g.hp;
+        assert!(g.cast(1));
+        g.tick(2.0);
+        assert!(g.hp > h0 + g.max_hp() * 0.15, "rain heals");
+        // Whirlpool opens with a radius
+        assert!(g.cast(2));
+        assert!(g.pool_r > 0.0);
+        // Lotus shields: damage taken is reduced
+        assert!(g.cast(3));
+        assert!(g.active[3] > 0.0);
+        let f = g.frame();
+        assert_eq!(f[17], 1.0);
+        assert!(f[18] > 0.0 && f[19] > 0.0 && f[20] > 0.0);
+        assert_eq!(f[7], 0.0, "no Asura storm visuals while she is active");
+    }
+
+    #[test]
     fn balance_report() {
         let mut g = Game::new(3.0);
         for m in [1.0, 5.0, 15.0, 30.0, 60.0, 120.0] {
@@ -1348,5 +1681,27 @@ mod tests {
             println!("t={:>5}s {}", target, r);
         }
         println!("rebirth beads now: {}", g.rebirth_beads());
+    }
+}
+
+#[cfg(test)]
+mod balance {
+    use super::*;
+    // cargo test --release balance_compare -- --ignored --nocapture
+    #[test]
+    #[ignore]
+    fn balance_compare() {
+        for ch in 0..2u32 {
+            for &(start, secs) in &[(1u32, 1800.0), (50, 1800.0)] {
+                let mut g = Game::new(7.0);
+                g.debug_set_wave(50);
+                g.set_char(ch);
+                g.s.wave = start; g.s.max_wave = start; g.start_wave();
+                if start == 50 { g.s.souls = 5e7; }
+                g.s.auto = true;
+                let r = g.debug_sim(secs, true);
+                println!("char {} start {} -> {}", ch, start, &r[..r.find("\"up\"").unwrap_or(r.len())]);
+            }
+        }
     }
 }

@@ -6,7 +6,7 @@ import { createRenderer, fmt } from './render.js';
 const SAVE_KEY = 'asura-idle-save-v1';
 const PREFS_KEY = 'asura-idle-prefs-v1';
 const AUTOSAVE_MS = 5000;
-const APP_VERSION = '3.2.3'; // keep in step with VERSION in sw.js
+const APP_VERSION = '3.3.0'; // keep in step with VERSION in sw.js
 
 const UPS = {
   damage:   { name: 'Wrath',        desc: 'Raw striking power. Doubles every 25 levels.', f: (v) => fmt(v) },
@@ -29,12 +29,30 @@ const SHOP = {
   meditation:   { name: 'Meditation',     desc: '+10% offline souls and +1h offline cap per level.' },
   tempestHeart: { name: 'Tempest Heart',  desc: 'Ability cooldowns −6% per level.' },
 };
-const ABS = {
-  wrath:   { name: 'Wrath Burst', glyph: '怒', sub: 'radial blast' },
-  storm:   { name: 'Storm',       glyph: '嵐', sub: 'I am the storm' },
-  beads:   { name: 'Blood Beads', glyph: '血', sub: 'heal · ×2 souls' },
-  sixarms: { name: 'Six Arms',    glyph: '臂', sub: '+5 foes · ×2 dmg' },
+// Characters (data-driven; the rules for each live in the Rust core's CHARS)
+const CHARS = {
+  asura: {
+    name: 'Asura', title: 'Wrathful Guardian', accent: '#b3202a', portrait: 'assets/chars/asura.webp',
+    lore: 'A demon-god of fury who fights the dark with fists, red beads and lightning.',
+    abs: {
+      wrath:   { name: 'Wrath Burst', glyph: '怒', sub: 'radial blast', desc: 'A leaping slam: a ring of ink that smashes every foe in reach.' },
+      storm:   { name: 'Storm',       glyph: '嵐', sub: 'I am the storm', desc: 'Lightning lashes the field; every strike chains to more foes, faster.' },
+      beads:   { name: 'Blood Beads', glyph: '血', sub: 'heal · ×2 souls', desc: 'Orbiting red beads heal him and double the souls reaped.' },
+      sixarms: { name: 'Six Arms',    glyph: '臂', sub: '+5 foes · ×2 dmg', desc: 'Four more arms: strikes hit 5 more foes for double damage.' },
+    },
+  },
+  daeva: {
+    name: 'Daeva', title: 'Tide-Dancer', accent: '#2a5bd8', portrait: 'assets/chars/daeva.webp',
+    lore: 'A celestial dancer of water and mercy. Less raw force, far more staying power.',
+    abs: {
+      tide:      { name: 'Tidal Surge',      glyph: '潮', sub: 'wave · push · slow', desc: 'A ring of ink-water rolls out, hurling foes back and slowing them.' },
+      rain:      { name: 'Healing Rain',     glyph: '雨', sub: 'heal over time', desc: 'Blue rain heals her for 10s; falling droplets strike nearby foes.' },
+      whirlpool: { name: 'Whirlpool',        glyph: '渦', sub: 'pull · grind', desc: 'A vortex opens in the thickest knot of foes, dragging them in and grinding them down.' },
+      lotus:     { name: 'Blue Lotus Beads', glyph: '蓮', sub: 'shield · heal', desc: 'Blue beads orbit her: each hit heals, and they shield 60% of harm.' },
+    },
+  },
 };
+let ABS = CHARS.asura.abs, curChar = '';
 const BOSSES = { 8: 'Oni Warlord', 9: 'Tengu King', 10: 'The Shogun', 11: 'Orochi', 12: 'Onryō Queen' };
 
 const $ = (id) => document.getElementById(id);
@@ -107,14 +125,7 @@ function buildUI() {
     shop.appendChild(c);
     shopEls[key] = { lvl: c.querySelector('.c-lvl'), btn: c.querySelector('.buy'), cost: c.querySelector('.b-cost') };
   });
-  const abs = $('abilities');
-  Object.entries(ABS).forEach(([key, d], i) => {
-    const b = document.createElement('button'); b.className = 'ab locked';
-    b.innerHTML = `<span class="cd"></span><span class="ab-glyph">${d.glyph}</span><span class="ab-name">${d.name}</span><span class="ab-sub"></span>`;
-    b.addEventListener('click', () => { if (game.cast(i)) refresh(true); });
-    abs.appendChild(b);
-    abEls[key] = { b, cd: b.querySelector('.cd'), sub: b.querySelector('.ab-sub') };
-  });
+  buildChars();
 
   // hold-to-repeat buying
   list.addEventListener('pointerdown', (e) => {
@@ -202,6 +213,58 @@ async function doRebirth() {
   banner('Reborn', `+${fmt(got)} prayer beads`, true);
 }
 
+// ------------------------------------------------------------ characters
+// ability buttons follow the active character
+function buildAbilities(key) {
+  if (curChar === key) return;
+  curChar = key; ABS = (CHARS[key] || CHARS.asura).abs;
+  const abs = $('abilities'); abs.innerHTML = '';
+  for (const k of Object.keys(abEls)) delete abEls[k];
+  Object.entries(ABS).forEach(([k, d], i) => {
+    const b = document.createElement('button'); b.className = 'ab locked'; b.dataset.key = k;
+    b.innerHTML = `<span class="cd"></span><span class="ab-glyph">${d.glyph}</span><span class="ab-name">${d.name}</span><span class="ab-sub"></span>`;
+    b.addEventListener('click', () => { if (game.cast(i)) refresh(true); });
+    abs.appendChild(b);
+    abEls[k] = { b, cd: b.querySelector('.cd'), sub: b.querySelector('.ab-sub') };
+  });
+  document.body.classList.toggle('daeva', key === 'daeva');
+  document.body.dataset.char = key;
+}
+const charEls = {};
+function buildChars() {
+  const list = $('char-list');
+  for (const [key, c] of Object.entries(CHARS)) {
+    const el = document.createElement('div'); el.className = 'char-card'; el.dataset.char = key;
+    el.style.setProperty('--c-accent', c.accent);
+    el.innerHTML = `<div class="ch-portrait" style="background-image:url(${c.portrait})" role="img" aria-label="${c.name} portrait"></div>
+      <div class="ch-head"><span class="ch-name">${c.name}</span><span class="ch-title">${c.title}</span></div>
+      <p class="ch-lore">${c.lore}</p>
+      <ul class="ch-abs">${Object.values(c.abs).map((a) => `<li><span class="g">${a.glyph}</span><span><b>${a.name}</b><span class="d">${a.desc}</span> <span class="d ab-u"></span></span></li>`).join('')}</ul>
+      <button class="ch-btn"></button>`;
+    el.querySelector('.ch-btn').addEventListener('click', () => selectChar(key));
+    list.appendChild(el);
+    charEls[key] = { el, btn: el.querySelector('.ch-btn'), us: [...el.querySelectorAll('.ab-u')] };
+  }
+}
+function selectChar(key) {
+  const def = ui && ui.chars.find((c) => c.key === key);
+  if (!def || !def.unlocked || ui.char === key) return;
+  if (game.set_char(def.id)) {
+    refresh(true); save();
+    toast(`${CHARS[key].name} steps into the circle.`);
+  }
+}
+function refreshChars() {
+  for (const c of ui.chars) {
+    const el = charEls[c.key]; if (!el) continue;
+    const sel = ui.char === c.key;
+    el.el.classList.toggle('selected', sel); el.el.classList.toggle('locked', !c.unlocked);
+    el.btn.disabled = !c.unlocked || sel;
+    el.btn.textContent = !c.unlocked ? `Locked · reach wave ${c.unlock}` : sel ? 'Fighting' : 'Choose ' + CHARS[c.key].name;
+    c.abs.forEach((a, i) => { if (el.us[i]) el.us[i].textContent = `(wave ${a.unlock}, ${Math.round(a.cd)}s cd)`; });
+  }
+}
+
 // ------------------------------------------------------------ UI refresh
 let lastRefresh = 0;
 function refresh(force) {
@@ -209,6 +272,7 @@ function refresh(force) {
   if (!force && now - lastRefresh < 220) return;
   lastRefresh = now;
   ui = JSON.parse(game.ui(prefs.buy));
+  buildAbilities(ui.char);
   $('souls').textContent = fmt(ui.souls);
   $('sps').textContent = ui.sps > 0 ? '+' + fmt(ui.sps) + '/s' : '';
   $('beads').textContent = fmt(ui.beads);
@@ -243,6 +307,7 @@ function refresh(force) {
       el.cost.textContent = s.maxed ? 'MAX' : fmt(s.cost);
     }
   }
+  if (tab === 'chars' || force) refreshChars();
   if (tab === 'scroll' || force) {
     const rows = [
       ['Damage', fmt(ui.dmg)], ['Attack speed', ui.aps.toFixed(2) + '/s'], ['Reach', Math.round(ui.range * 100)],
@@ -253,13 +318,14 @@ function refresh(force) {
       ['Best wave ever', ui.bestWave], ['Foes slain', fmt(ui.kills)], ['Souls reaped', fmt(ui.totalSouls)],
       ['Rebirths', ui.rebirths], ['Time fighting', dur(ui.playTime)],
     ];
+    $('stats-label').textContent = `— ${(CHARS[ui.char] || CHARS.asura).name} Stats —`;
     $('stat-list').innerHTML = rows.map(([k, v]) => `<dt>${k}</dt><dd>${v}</dd>`).join('');
   }
   updateAbilities();
 }
 function updateAbilities() {
   ui.abs.forEach((a) => {
-    const el = abEls[a.key];
+    const el = abEls[a.key]; if (!el) return;
     el.b.classList.toggle('locked', !a.unlocked);
     el.b.disabled = !a.unlocked;
     const ready = a.unlocked && a.cd <= 0;
@@ -282,8 +348,14 @@ function onEvents(ev) {
       refresh(true);
     } else if (t === 9) {
       banner(BOSSES[a] || 'Boss', 'approaches', true);
-    } else if (t === 11 && a === 1) {
+    } else if (t === 11 && a === 1 && ev[i + 4] === 0) {
       banner('I am the storm', '', false);
+    } else if (t === 14) { // a character unlocked
+      const c = ui && ui.chars ? ui.chars.find((x) => x.id === a) : null, d = c && CHARS[c.key];
+      if (d) { banner(d.name + ' awakens', 'choose her in Characters', true); toast(`${d.name} unlocked. Open the Characters tab to fight as her.`); }
+      refresh(true);
+    } else if (t === 15) {
+      refresh(true);
     }
   }
 }
