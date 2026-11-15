@@ -7,8 +7,12 @@
 <meta name="description" content="An idle tower defense game in sumi-e ink. You are the Asura; ninjas, samurai, oni and tengu come from every direction. Built in Rust + WebAssembly. Saves in your browser.">
 <meta name="theme-color" content="#ece6d8">
 <link rel="icon" href="assets/icon-192.png">
-<link rel="apple-touch-icon" href="assets/icon-192.png">
-<link rel="manifest" href="manifest.webmanifest">
+<link rel="apple-touch-icon" href="assets/apple-touch-icon.png">
+<link rel="manifest" href="manifest.json">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="Asura">
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
 <link rel="preload" href="fonts/permanentmarker.woff2" as="font" type="font/woff2" crossorigin>
 <link rel="preload" href="fonts/patrickhandsc.woff2" as="font" type="font/woff2" crossorigin>
 <link rel="stylesheet" href="style.css">
@@ -36,6 +40,7 @@
         <canvas id="arena" aria-label="Battlefield: the Asura in the centre, enemies approaching from every side"></canvas>
         <div class="hud-top">
           <div class="wave-prog"><div id="wave-fill"></div></div>
+          <button id="install-chip" class="chip ghost" hidden title="Install Asura as an app">⤓ Install</button>
           <button id="auto-btn" class="chip on" aria-pressed="true" title="Advance to the next wave automatically">Auto ▸</button>
         </div>
         <div class="hud-bottom">
@@ -90,6 +95,12 @@
         <label class="toggle"><input type="checkbox" id="opt-fx"> <span>Reduced effects</span></label>
         <label class="toggle"><input type="checkbox" id="opt-nums" checked> <span>Damage numbers</span></label>
       </div>
+      <div class="panel-label inline">— Take It With You —</div>
+      <div class="app-box">
+        <p class="note" id="app-status">Install Asura as an app: it opens full-screen from your home screen and plays offline.</p>
+        <p class="note" id="ios-hint" hidden>On iPhone or iPad: tap <b>Share</b> <span aria-hidden="true">⬆︎</span> in Safari, then <b>Add to Home Screen</b>.</p>
+        <button id="install-btn" class="btn primary" hidden>⤓ Install app</button>
+      </div>
       <div class="panel-label inline">— Save Scroll —</div>
       <p class="note">Saves to this browser every 5 seconds and when you leave. <span id="last-saved"></span></p>
       <div class="btn-row">
@@ -103,7 +114,7 @@
         <img src="assets/character-sheet.jpg" alt="Asura character exploration sheet: monochrome ink, red beads and sash" loading="lazy" width="640" height="953">
         <figcaption>“I am the storm” — before the end.</figcaption>
       </figure>
-      <p class="note tiny">Core simulation written in Rust, compiled to WebAssembly. No tracking, no accounts. <a href="https://github.com/timothyrmccaslin-sys/asura-idle" target="_blank" rel="noopener">Source</a></p>
+      <p class="note tiny">Core simulation written in Rust, compiled to WebAssembly. No tracking, no accounts. <span id="app-version"></span> <a href="https://github.com/timothyrmccaslin-sys/asura-idle" target="_blank" rel="noopener">Source</a></p>
     </div>
   </section>
 </main>
@@ -116,6 +127,7 @@
   </form>
 </dialog>
 
+<button id="update-pill" class="update-pill" hidden>New version, tap to refresh</button>
 <div id="toast" class="toast" role="status" aria-live="polite"></div>
 
 <script type="module" src="main.js"></script>

@@ -6,6 +6,7 @@ import { createRenderer, fmt } from './render.js';
 const SAVE_KEY = 'asura-idle-save-v1';
 const PREFS_KEY = 'asura-idle-prefs-v1';
 const AUTOSAVE_MS = 5000;
+const APP_VERSION = '2.0.0'; // keep in step with VERSION in sw.js
 
 const UPS = {
   damage:   { name: 'Wrath',        desc: 'Raw striking power. Doubles every 25 levels.', f: (v) => fmt(v) },
@@ -323,6 +324,60 @@ function awayReport(seconds, resumed) {
     [{ label: 'Return to battle', cls: 'primary', value: 'ok' }]);
 }
 
+
+// ------------------------------------------------------------ installable app (PWA)
+let deferredPrompt = null, refreshing = false;
+const isStandalone = () => matchMedia('(display-mode: standalone)').matches || navigator.standalone === true;
+const isIOS = () => /iphone|ipad|ipod/i.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+function updateInstallUI() {
+  const chip = $('install-chip'), btn = $('install-btn'), hint = $('ios-hint'), status = $('app-status');
+  if (isStandalone()) {
+    chip.hidden = true; btn.hidden = true; hint.hidden = true;
+    status.textContent = 'Running as an installed app. It works offline, and your save stays on this device.';
+    return;
+  }
+  const ios = isIOS() && !deferredPrompt;
+  chip.hidden = !(deferredPrompt || ios);
+  btn.hidden = !deferredPrompt;
+  hint.hidden = !ios;
+}
+async function promptInstall() {
+  if (deferredPrompt) {
+    deferredPrompt.prompt();
+    const { outcome } = await deferredPrompt.userChoice.catch(() => ({ outcome: 'dismissed' }));
+    deferredPrompt = null; updateInstallUI();
+    if (outcome === 'accepted') toast('Installing Asura…');
+  } else if (isIOS()) {
+    modal('Add to Home Screen', `<p>In Safari, tap <b>Share</b> <span aria-hidden="true">⬆︎</span>, then <b>Add to Home Screen</b>.</p><p class="note">Asura then opens full-screen and plays offline. Your save stays on this device.</p>`,
+      [{ label: 'Got it', cls: 'primary', value: 'ok' }]);
+  }
+}
+function setupPWA() {
+  window.addEventListener('beforeinstallprompt', (e) => { e.preventDefault(); deferredPrompt = e; updateInstallUI(); });
+  window.addEventListener('appinstalled', () => { deferredPrompt = null; updateInstallUI(); toast('Asura installed. Find it on your home screen.'); });
+  $('install-chip').addEventListener('click', promptInstall);
+  $('install-btn').addEventListener('click', promptInstall);
+  $('app-version').textContent = 'v' + APP_VERSION + '.';
+  updateInstallUI();
+  if (!('serviceWorker' in navigator)) return;
+  navigator.serviceWorker.addEventListener('controllerchange', () => { if (refreshing) location.reload(); });
+  navigator.serviceWorker.register('./sw.js', { updateViaCache: 'none' }).then((reg) => {
+    const offer = (w) => {
+      if (!w || !navigator.serviceWorker.controller) return; // first install: nothing to update
+      const pill = $('update-pill');
+      pill.hidden = false;
+      pill.onclick = () => { save(); refreshing = true; pill.textContent = 'Updating…'; w.postMessage({ type: 'SKIP_WAITING' }); };
+    };
+    if (reg.waiting) offer(reg.waiting);
+    reg.addEventListener('updatefound', () => {
+      const w = reg.installing;
+      if (w) w.addEventListener('statechange', () => { if (w.state === 'installed') offer(w); });
+    });
+    setInterval(() => reg.update().catch(() => {}), 30 * 60 * 1000);
+    document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') reg.update().catch(() => {}); });
+  }).catch((e) => console.warn('service worker registration failed', e));
+}
+
 async function main() {
   try {
     await init();
@@ -334,6 +389,7 @@ async function main() {
   renderer = createRenderer($('arena'));
   renderer.setReduced(prefs.fx); renderer.setNumbers(prefs.nums);
   buildUI();
+  setupPWA();
 
   const raw = localStorage.getItem(SAVE_KEY);
   let loaded = false;

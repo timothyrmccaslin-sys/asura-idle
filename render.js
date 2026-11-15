@@ -1,3 +1,4 @@
+import { drawFigure, drawAsura as drawAsuraFig, brush } from './figures.js';
 // Ink renderer — draws the state exported by the Rust/wasm core onto a canvas
 // in a sumi-e style. Pure presentation: no game rules live here.
 
@@ -50,6 +51,9 @@ export function createRenderer(canvas) {
   const slashes = []; // brush slash marks
   const bolts = [];   // lightning
   const rings = [];   // shockwaves
+  const corpses = []; // dissolving foes
+  const swipes = [];  // Asura's strike arcs
+  const wisps = [];   // ink smoke off the Asura
   let shake = 0, hurtFlash = 0, healFlash = 0, time = 0;
   const R = rng(1234);
 
@@ -65,6 +69,8 @@ export function createRenderer(canvas) {
     scale = Math.min(W, H / SQ * 0.96) / 2 * 0.98;
     cx = W / 2; cy = H / 2 + H * 0.02;
     buildBackground();
+    sprites = new Map();
+    prewarm();
   }
 
   // ------------------------------------------------------------ background
@@ -209,239 +215,86 @@ export function createRenderer(canvas) {
     ctx.restore();
   }
 
-  // ------------------------------------------------------------ figures
-  // Each figure is drawn in a 100-unit-tall local space, feet at (0,0), facing +x.
-  function legs(g, walk, spread, w, color, hip = -40) {
-    const s = Math.sin(walk) * 8;
-    stroke(g, [-3, hip, -spread + s, -2], w, color);
-    stroke(g, [3, hip, spread - s, -2], w, color);
+  // ------------------------------------------------------------ sprite cache
+  // Figures are vector-drawn once per animation frame, then given an ink-bleed
+  // halo, dry-brush grain and soft wash lighting, and cached as bitmaps.
+  const FRAMES = 12, TAU = Math.PI * 2;
+  const BOX = { x0: -92, x1: 92, y0: -178, y1: 22 };
+  const CADENCE = [6.5, 10, 6, 6, 5.5, 3.2, 2.4, 5, 4.5, 3, 4.5, 2.2, 2.2];
+  let sprites = new Map(), dryGrain = null, prewarmQ = [];
+  function getDryGrain() {
+    if (dryGrain) return dryGrain;
+    dryGrain = document.createElement('canvas'); dryGrain.width = dryGrain.height = 96;
+    const g = dryGrain.getContext('2d'), r = rng(5);
+    for (let i = 0; i < 520; i++) {
+      g.fillStyle = `rgba(236,230,216,${0.25 + r() * 0.6})`;
+      const x = r() * 96, y = r() * 96;
+      g.fillRect(x, y, 0.6 + r() * 1.8, 0.4 + r() * 0.8);
+    }
+    return dryGrain;
+  }
+  function makeSprite(px, drawFn) {
+    const k = px / 100;
+    const w = Math.max(2, Math.ceil((BOX.x1 - BOX.x0) * k)), h = Math.max(2, Math.ceil((BOX.y1 - BOX.y0) * k));
+    const a = document.createElement('canvas'); a.width = w; a.height = h;
+    const g = a.getContext('2d');
+    g.setTransform(k, 0, 0, k, -BOX.x0 * k, -BOX.y0 * k);
+    drawFn(g);
+    const out = document.createElement('canvas'); out.width = w; out.height = h;
+    const o = out.getContext('2d');
+    o.filter = `blur(${Math.max(0.8, k * 2.4).toFixed(2)}px)`; o.globalAlpha = 0.5; o.drawImage(a, 0, 0);
+    o.filter = 'none'; o.globalAlpha = 1; o.drawImage(a, 0, 0);
+    o.globalCompositeOperation = 'source-atop';
+    o.globalAlpha = 0.28; o.fillStyle = o.createPattern(getDryGrain(), 'repeat'); o.fillRect(0, 0, w, h);
+    o.globalAlpha = 1;
+    const lg = o.createLinearGradient(0, 0, w, h);
+    lg.addColorStop(0, 'rgba(255,250,240,.12)'); lg.addColorStop(0.6, 'rgba(0,0,0,0)'); lg.addColorStop(1, 'rgba(0,0,0,.14)');
+    o.fillStyle = lg; o.fillRect(0, 0, w, h);
+    o.globalCompositeOperation = 'source-over';
+    return { c: out, ox: -BOX.x0 * k, oy: -BOX.y0 * k, flash: null };
+  }
+  function enemySprite(kind, fr, px) {
+    const key = kind + '|' + fr + '|' + Math.round(px);
+    let s = sprites.get(key);
+    if (!s) { s = makeSprite(px, (g) => drawFigure(g, kind, (fr / FRAMES) * TAU)); sprites.set(key, s); }
+    return s;
+  }
+  function asuraSprite(fr, li, arms, px) {
+    const key = 'A|' + fr + '|' + li + '|' + (arms ? 1 : 0) + '|' + Math.round(px);
+    let s = sprites.get(key);
+    if (!s) { s = makeSprite(px, (g) => drawAsuraFig(g, (fr / FRAMES) * TAU, [0, 0.4, 0.75, 1][li], arms)); sprites.set(key, s); }
+    return s;
+  }
+  function flashOf(s) {
+    if (s.flash) return s.flash;
+    const f = document.createElement('canvas'); f.width = s.c.width; f.height = s.c.height;
+    const g = f.getContext('2d'); g.drawImage(s.c, 0, 0);
+    g.globalCompositeOperation = 'source-atop'; g.fillStyle = 'rgba(244,239,229,.82)'; g.fillRect(0, 0, f.width, f.height);
+    s.flash = f; return f;
+  }
+  const enemyPx = (kind) => [0.15, 0.14, 0.13, 0.155, 0.165, 0.15, 0.155, 0.21, 0.34, 0.32, 0.34, 0.38, 0.32][kind] * scale * 1.35;
+  const asuraPx = () => 0.31 * scale;
+  function prewarm() {
+    // build the Asura idle cycle and the first foes during idle time
+    prewarmQ = [];
+    for (let f = 0; f < FRAMES; f++) prewarmQ.push(() => asuraSprite(f, 0, false, asuraPx()));
+    for (const k of [0, 1]) for (let f = 0; f < FRAMES; f++) prewarmQ.push(() => enemySprite(k, f, enemyPx(k)));
+    for (let li = 1; li < 4; li++) for (let f = 0; f < FRAMES; f += 3) prewarmQ.push(() => asuraSprite(f, li, false, asuraPx()));
+    for (let k = 2; k < 8; k++) for (let f = 0; f < FRAMES; f++) prewarmQ.push(() => enemySprite(k, f, enemyPx(k)));
+  }
+  function pumpPrewarm() {
+    const t0 = performance.now();
+    while (prewarmQ.length && performance.now() - t0 < 4) prewarmQ.shift()();
   }
 
-  const drawers = {
-    0(g, t, w) { // ashigaru: jingasa hat + yari
-      legs(g, w, 10, 7, INK);
-      poly(g, [-11, -42, -12, -72, 12, -72, 11, -42], GREY);
-      stroke(g, [-10, -52, 10, -52], 1.5, PAPER); stroke(g, [-10, -60, 10, -60], 1.5, PAPER);
-      stroke(g, [8, -66, 18, -52], 6, INK);
-      stroke(g, [-14, -8, 36, -118], 2.6, INK);
-      poly(g, [36, -118, 32, -104, 40, -106], INK);
-      circ(g, 0, -80, 8, INK2);
-      poly(g, [-24, -84, 24, -84, 0, -98], INK);
-    },
-    1(g, t, w) { // ninja: mask band, scarf, short blade
-      legs(g, w * 1.4, 12, 6, INK);
-      poly(g, [-9, -42, -11, -72, 11, -72, 9, -42], INK);
-      stroke(g, [8, -68, 20, -56], 5, INK);
-      stroke(g, [18, -58, 42, -76], 2.2, INK2);
-      stroke(g, [-8, -66, -16, -50], 5, INK);
-      circ(g, 0, -82, 10, INK);
-      g.fillStyle = PAPER; g.fillRect(-2, -87, 13, 5);
-      circ(g, 3, -84.5, 1.4, INK); circ(g, 8, -84.5, 1.4, INK);
-      const fl = Math.sin(t * 9 + w) * 4;
-      g.lineCap = 'round';
-      g.strokeStyle = INK; g.lineWidth = 3;
-      g.beginPath(); g.moveTo(-8, -84); g.quadraticCurveTo(-22, -84 + fl, -34, -78 - fl); g.stroke();
-    },
-    2(g, t, w) { // kappa: shell, dish, beak
-      const b = Math.abs(Math.sin(w)) * 3;
-      stroke(g, [-6, -14, -12, -1], 5, INK); stroke(g, [6, -14, 12, -1], 5, INK);
-      g.fillStyle = INK2; g.beginPath(); g.ellipse(-6, -34 - b, 17, 22, 0, 0, Math.PI * 2); g.fill();
-      g.strokeStyle = PAPER; g.lineWidth = 1.2;
-      g.beginPath(); g.ellipse(-6, -34 - b, 11, 15, 0, 0, Math.PI * 2); g.stroke();
-      g.fillStyle = GREY; g.beginPath(); g.ellipse(4, -34 - b, 11, 18, 0, 0, Math.PI * 2); g.fill();
-      circ(g, 6, -60 - b, 12, GREY);
-      g.fillStyle = PAPER; g.beginPath(); g.ellipse(6, -70 - b, 9, 3.5, 0, 0, Math.PI * 2); g.fill();
-      g.strokeStyle = INK; g.lineWidth = 1.4;
-      for (let i = -3; i <= 3; i++) { g.beginPath(); g.moveTo(6 + i * 3.2, -68 - b); g.lineTo(6 + i * 4, -74 - b); g.stroke(); }
-      poly(g, [16, -60 - b, 26, -57 - b, 16, -54 - b], INK);
-      circ(g, 11, -62 - b, 1.6, INK);
-    },
-    3(g, t, w) { // ronin: tattered kimono, wide straw hat
-      legs(g, w, 9, 6, INK);
-      poly(g, [-10, -76, 10, -76, 15, -40, 10, -34, 6, -40, 0, -32, -6, -38, -12, -32, -15, -40], GREY);
-      stroke(g, [-8, -74, 6, -50], 1.5, INK);
-      stroke(g, [-16, -46, 18, -42], 2.6, INK); // sheathed sword
-      stroke(g, [8, -68, 14, -48], 5, INK2);
-      circ(g, 0, -82, 8, INK2);
-      g.fillStyle = WASH; g.beginPath(); g.ellipse(0, -86, 25, 8, 0, Math.PI, 0); g.fill();
-      g.strokeStyle = INK; g.lineWidth = 2; g.beginPath(); g.ellipse(0, -86, 25, 8, 0, Math.PI, 0); g.stroke();
-      stroke(g, [-25, -86, 25, -86], 2, INK);
-    },
-    4(g, t, w) { // samurai: kabuto with crescent, lamellar armour, raised katana
-      const s = Math.sin(w) * 5;
-      poly(g, [-10, -42, 10, -42, 18 - s, 0, 4, 0, 0, -26, -4, 0, -18 + s, 0], INK2);
-      poly(g, [-13, -42, -14, -74, 14, -74, 13, -42], INK);
-      for (let y = -48; y > -72; y -= 6) stroke(g, [-12, y, 12, y], 1, '#8b8378');
-      poly(g, [-20, -74, -11, -76, -11, -60, -21, -62], GREY);
-      poly(g, [20, -74, 11, -76, 11, -60, 21, -62], GREY);
-      stroke(g, [-2, -64, 4, -56], 1.6, RED);
-      stroke(g, [14, -70, 22, -86], 5, INK);
-      stroke(g, [22, -86, 8, -124], 2.4, INK2);
-      circ(g, 0, -82, 8, INK2);
-      g.fillStyle = INK; g.beginPath(); g.arc(0, -86, 11, Math.PI, 0); g.fill();
-      poly(g, [-13, -86, 13, -86, 16, -78, -16, -78], INK);
-      g.strokeStyle = INK; g.lineWidth = 2.4; g.beginPath();
-      g.moveTo(-2, -95); g.quadraticCurveTo(-16, -104, -14, -116); g.moveTo(2, -95); g.quadraticCurveTo(16, -104, 14, -116); g.stroke();
-    },
-    5(g, t, w) { // tengu: wings, long red nose, floating
-      const fl = Math.sin(t * 10 + w) * 0.35 + 0.65;
-      g.save(); g.translate(0, -16 - Math.sin(t * 3 + w) * 3);
-      g.fillStyle = INK;
-      for (const side of [-1, 1]) {
-        g.save(); g.translate(side * -3, -66); g.scale(side, fl);
-        g.beginPath(); g.moveTo(0, 0);
-        g.quadraticCurveTo(-30, -30, -46, -14); g.lineTo(-38, -8); g.lineTo(-44, 2); g.lineTo(-34, 4); g.lineTo(-38, 14); g.lineTo(-24, 10);
-        g.closePath(); g.fill(); g.restore();
-      }
-      poly(g, [-10, -70, 10, -70, 14, -28, -14, -28], GREY);
-      stroke(g, [-8, -66, 6, -40], 1.4, INK);
-      stroke(g, [10, -64, 22, -48], 5, INK2);
-      stroke(g, [22, -30, 26, -90], 2, INK2);
-      circ(g, 0, -78, 9, INK2);
-      stroke(g, [6, -79, 22, -76], 3.4, RED);
-      circ(g, 4, -82, 1.4, PAPER);
-      g.fillStyle = INK; g.fillRect(-4, -94, 8, 7);
-      g.restore();
-    },
-    6(g, t, w) { // yurei: white robe, long black hair, legless
-      g.save(); g.translate(0, -10 - Math.sin(t * 2 + w) * 4);
-      g.globalAlpha *= 0.82 + Math.sin(t * 7 + w * 3) * 0.08;
-      const gr = g.createLinearGradient(0, -74, 0, 6);
-      gr.addColorStop(0, '#f7f3ea'); gr.addColorStop(0.75, 'rgba(247,243,234,.75)'); gr.addColorStop(1, 'rgba(247,243,234,0)');
-      g.fillStyle = gr;
-      g.beginPath(); g.moveTo(-10, -74); g.lineTo(10, -74); g.quadraticCurveTo(18, -30, 8 + Math.sin(t * 3) * 6, 6);
-      g.lineTo(-12 + Math.sin(t * 3 + 1) * 6, 6); g.quadraticCurveTo(-18, -30, -10, -74); g.fill();
-      g.strokeStyle = 'rgba(22,20,18,.55)'; g.lineWidth = 1.2; g.stroke();
-      stroke(g, [6, -66, 24, -60, 30, -62], 2.4, 'rgba(240,236,226,1)');
-      stroke(g, [6, -66, 24, -60, 30, -62], 0.8, 'rgba(22,20,18,.5)');
-      circ(g, 0, -82, 8, '#f3efe6');
-      g.fillStyle = INK; g.beginPath();
-      g.moveTo(-10, -86); g.quadraticCurveTo(0, -96, 10, -86); g.lineTo(9, -52); g.lineTo(4, -62); g.lineTo(2, -50); g.lineTo(-3, -60); g.lineTo(-6, -48); g.lineTo(-11, -58);
-      g.closePath(); g.fill();
-      g.restore();
-    },
-    7(g, t, w) { // oni: horns, kanabo club, red eyes
-      legs(g, w * 0.8, 13, 10, INK);
-      poly(g, [-14, -40, 14, -40, 16, -26, -16, -26], GREY);
-      for (let i = -12; i < 14; i += 6) stroke(g, [i, -40, i + 3, -27], 2, INK);
-      poly(g, [-18, -40, -22, -74, 22, -76, 18, -40], INK2);
-      stroke(g, [-4, -70, -4, -48], 1, '#6c655c'); stroke(g, [-14, -62, 10, -60], 1, '#6c655c');
-      stroke(g, [18, -72, 30, -56], 9, INK2);
-      g.save(); g.translate(30, -56); g.rotate(-0.9 + Math.sin(t * 2 + w) * 0.12);
-      poly(g, [-3, 0, 3, 0, 6, -46, -6, -46], INK);
-      g.fillStyle = PAPER; for (let y = -12; y > -44; y -= 8) { circ(g, -3, y, 1.4, PAPER); circ(g, 3, y - 4, 1.4, PAPER); }
-      g.restore();
-      stroke(g, [-18, -70, -26, -48], 9, INK2);
-      circ(g, 2, -84, 12, INK);
-      g.fillStyle = PAPER; g.strokeStyle = INK; g.lineWidth = 1.2;
-      for (const sx of [-1, 1]) { g.beginPath(); g.moveTo(sx * 6, -93); g.quadraticCurveTo(sx * 10, -104, sx * 14, -110); g.lineTo(sx * 10, -94); g.closePath(); g.fill(); g.stroke(); }
-      circ(g, 5, -86, 2, RED2); circ(g, 11, -86, 2, RED2);
-      poly(g, [6, -78, 8, -73, 10, -78], PAPER);
-    },
-  };
-  // bosses reuse silhouettes with extra regalia
-  drawers[8] = (g, t, w) => { // oni warlord
-    drawers[7](g, t, w);
-    g.strokeStyle = RED; g.lineWidth = 2.4; g.beginPath(); g.moveTo(-10, -104); g.lineTo(-14, -110); g.moveTo(10, -104); g.lineTo(14, -110); g.stroke();
-    stroke(g, [-18, -44, 18, -44], 3.5, RED);
-  };
-  drawers[9] = (g, t, w) => { // tengu king
-    drawers[5](g, t, w);
-    g.save(); g.translate(0, -16 - Math.sin(t * 3 + w) * 3);
-    stroke(g, [-10, -62, 10, -62], 3, RED); circ(g, 0, -78, 9.5, RED); stroke(g, [6, -79, 26, -77], 3.6, RED2);
-    circ(g, 4, -82, 1.6, INK); g.restore();
-  };
-  drawers[10] = (g, t, w) => { // shogun with sashimono banner
-    stroke(g, [-8, -60, -14, -140], 2, INK);
-    poly(g, [-14, -140, -40, -140, -40, -104, -14, -104], '#f4f0e6');
-    g.strokeStyle = INK; g.lineWidth = 1.2; g.strokeRect(-40, -140, 26, 36);
-    circ(g, -27, -122, 8, RED);
-    drawers[4](g, t, w);
-    poly(g, [-3, -96, 0, -112, 3, -96], RED);
-  };
-  drawers[11] = (g, t, w) => { // orochi — many-headed serpent
-    g.fillStyle = INK2; g.beginPath(); g.ellipse(0, -14, 34, 15, 0, 0, Math.PI * 2); g.fill();
-    g.strokeStyle = '#6c655c'; g.lineWidth = 1;
-    for (let i = -24; i < 28; i += 8) { g.beginPath(); g.arc(i, -14, 6, Math.PI * 1.1, Math.PI * 1.9); g.stroke(); }
-    for (let h = 0; h < 6; h++) {
-      const a = -1.2 + h * 0.48, sw = Math.sin(t * 2 + h * 1.7 + w) * 8;
-      const bx = Math.sin(a) * 18, ex = Math.sin(a) * 40 + sw, ey = -70 - Math.cos(a) * 30 + Math.abs(sw) * 0.5;
-      g.strokeStyle = h % 2 ? INK : INK2; g.lineWidth = 8; g.lineCap = 'round';
-      g.beginPath(); g.moveTo(bx, -20); g.quadraticCurveTo(bx * 1.6 - sw, -50, ex, ey); g.stroke();
-      g.save(); g.translate(ex, ey); g.rotate(a * 0.6);
-      poly(g, [-6, 2, 12, -2, -6, -8], INK);
-      circ(g, 2, -4, 1.6, RED2); g.restore();
-    }
-  };
-  drawers[12] = (g, t, w) => { // onryo queen
-    drawers[6](g, t, w);
-    g.save(); g.translate(0, -10 - Math.sin(t * 2 + w) * 4);
-    stroke(g, [-9, -66, 9, -66], 2.6, RED);
-    stroke(g, [-11, -56, -14, -20], 1.6, RED);
-    circ(g, 3, -80, 1.6, RED2);
-    g.restore();
-  };
-
   function drawAsura(f, t) {
-    const [, , atk, face] = f;
-    const size = 0.3 * scale;
-    const k = size / 100;
-    const x = cx, y = cy - 2 * dpr;
-    ctx.save(); ctx.translate(x, y); ctx.scale(k * (face || 1), k);
-    const g = ctx;
-    const br = Math.sin(t * 2.2) * 1.2;
+    const atk = f[2], face = f[3] || 1;
     const lunge = atk > 0 ? Math.sin((atk / 0.18) * Math.PI) : 0;
-    // hakama (wide ink wash trousers, torn hem)
-    poly(g, [-14, -46, 14, -46, 30, -6, 22, 0, 16, -8, 10, -2, 4, -24, -4, -24, -10, -2, -16, -8, -22, 0, -30, -6], INK2);
-    g.strokeStyle = 'rgba(236,230,216,.35)'; g.lineWidth = 1;
-    for (let i = 0; i < 4; i++) { g.beginPath(); g.moveTo(-10 + i * 3, -40); g.lineTo(-18 + i * 2, -10); g.stroke(); g.beginPath(); g.moveTo(8 + i * 3, -40); g.lineTo(14 + i * 4, -10); g.stroke(); }
-    // ankle beads
-    for (const sx of [-22, 22]) for (let i = -2; i <= 2; i++) circ(g, sx + i * 2.6, -4, 1.6, INK);
-    // sash
-    poly(g, [-16, -52, 16, -52, 15, -44, -15, -44], RED);
-    const sw = Math.sin(t * 4) * 5;
-    g.fillStyle = RED;
-    g.beginPath(); g.moveTo(-12, -48); g.quadraticCurveTo(-26, -40 + sw, -38, -32 - sw); g.lineTo(-34, -28 - sw); g.quadraticCurveTo(-24, -36, -10, -44); g.fill();
-    g.beginPath(); g.moveTo(-10, -46); g.quadraticCurveTo(-20, -30 + sw, -28, -18); g.lineTo(-24, -16); g.quadraticCurveTo(-16, -30, -6, -44); g.fill();
-    stroke(g, [-14, -50, 14, -50], 1, 'rgba(90,10,14,.7)');
-    // torso
-    poly(g, [-22, -84 + br, 22, -84 + br, 14, -52, -14, -52], '#2f2b28');
-    g.strokeStyle = 'rgba(236,230,216,.55)'; g.lineWidth = 1.1;
-    g.beginPath(); g.moveTo(-12, -78); g.lineTo(-2, -66); g.moveTo(6, -80); g.lineTo(14, -70); g.moveTo(-6, -62); g.lineTo(4, -58); g.stroke();
-    // arms — punching arm extends toward the target
-    const reach = 10 + lunge * 22;
-    stroke(g, [-20, -80 + br, -30, -64, -24, -54], 9, '#2f2b28');
-    circ(g, -24, -53, 6, INK);
-    stroke(g, [20, -80 + br, 24 + reach * 0.5, -70, 26 + reach, -72 + lunge * 6], 9, '#2f2b28');
-    circ(g, 28 + reach, -72 + lunge * 6, 6.5, INK);
-    for (let i = 0; i < 4; i++) circ(g, -27 + i * 1.2, -58 + i * 0.4, 1.7, INK);
-    for (let i = 0; i < 4; i++) circ(g, 18 + reach * 0.85 + i * 1.2, -71 + lunge * 5, 1.7, INK);
-    if (f[9] > 0) { // six arms — ghostly extra limbs
-      g.globalAlpha = 0.45;
-      for (const [ax, ay] of [[34, -92], [36, -58], [-34, -94], [-36, -60]]) { stroke(g, [ax > 0 ? 16 : -16, -76, ax, ay], 6, INK2); circ(g, ax, ay, 5, INK); }
-      g.globalAlpha = 1;
-    }
-    // head
-    circ(g, 0, -92 + br, 9, '#2f2b28');
-    // hair — wild spikes and topknot
-    g.fillStyle = INK;
-    const hs = Math.sin(t * 3) * 2;
-    g.beginPath(); g.moveTo(-10, -92 + br);
-    const spikes = [[-22, -100], [-12, -98], [-24, -112], [-10, -106], [-14, -122], [-2, -110], [4, -128], [8, -110], [20, -118], [12, -102], [24, -104], [11, -94]];
-    for (const [sx, sy] of spikes) g.lineTo(sx + (sy < -110 ? hs : hs * 0.4), sy + br);
-    g.closePath(); g.fill();
-    stroke(g, [-14, -100 + br, -30 + hs, -94, -38 + hs * 1.5, -98], 2, INK);
-    stroke(g, [-12, -96 + br, -28 + hs, -84, -34 + hs, -86], 1.6, INK);
-    // red eyes
-    circ(g, 4, -93 + br, 1.6, RED2); circ(g, 8.5, -93 + br, 1.4, RED2);
-    stroke(g, [2, -96 + br, 10, -95 + br], 1.4, INK);
-    // bead necklace
-    for (let i = 0; i < 9; i++) {
-      const a = Math.PI * 0.12 + (i / 8) * Math.PI * 0.76;
-      const bx = Math.cos(a) * 15, by = -84 + br + Math.sin(a) * 9;
-      circ(g, bx, by, 3.6, '#5a0c10'); circ(g, bx, by, 3.0, RED); circ(g, bx - 1, by - 1.1, 0.9, 'rgba(255,220,220,.8)');
-    }
-    stroke(g, [4, -76 + br, 6, -66, 3, -60], 1.2, RED);
+    const li = lunge > 0.85 ? 3 : lunge > 0.55 ? 2 : lunge > 0.2 ? 1 : 0;
+    const fr = Math.floor((((t * 2.2) / TAU) % 1) * FRAMES) % FRAMES;
+    const s = asuraSprite(reduced ? 0 : fr, li, f[9] > 0, asuraPx());
+    ctx.save(); ctx.translate(cx, cy - 2 * dpr); ctx.scale(face, 1);
+    ctx.drawImage(s.c, -s.ox, -s.oy);
     ctx.restore();
   }
 
@@ -450,7 +303,7 @@ export function createRenderer(canvas) {
     const max = reduced ? 60 : 320;
     for (let i = 0; i < n && parts.length < max; i++) {
       const a = R() * Math.PI * 2, v = (0.15 + R() * 0.5) * power;
-      parts.push({ x, y, z: 0, vx: Math.cos(a) * v, vy: Math.sin(a) * v, vz: 0.3 + R() * 0.6 * power, r: (1 + R() * 2.5) * dpr, red: red && R() < 0.8, life: 0.7 + R() * 0.5 });
+      parts.push({ x, y, z: 0, vx: Math.cos(a) * v, vy: Math.sin(a) * v, vz: 0.3 + R() * 0.6 * power, r: (0.6 + R() * 1.9) * dpr, red: red && R() < 0.8, life: 0.7 + R() * 0.5 });
     }
   }
   function decal(x, y, s, red) {
@@ -473,11 +326,15 @@ export function createRenderer(canvas) {
           if (b && !reduced) shake = Math.max(shake, 2);
           break;
         case EV.KILL:
+          if (corpses.length < 24) corpses.push({ kind: b, x, y, life: c ? 0.9 : 0.55, max: c ? 0.9 : 0.55, face: x > 0 ? -1 : 1 });
           splat(x, y, c ? 40 : 12, false, c ? 2 : 1.1);
           splat(x, y, c ? 20 : 4, true, 1);
           decal(x, y, c ? 2.4 : 1, R() < 0.35 || !!c);
           if (numbersOn) addText(x, y - 0.06, '+' + fmt(a), WASH, 12);
           if (c && !reduced) shake = 8;
+          break;
+        case EV.ATTACK:
+          if (swipes.length < 6) swipes.push({ x, y, life: 0.17, flip: R() < 0.5 });
           break;
         case EV.WRATH:
           rings.push({ r: 0.05, max: a, life: 0.6, red: true });
@@ -501,6 +358,7 @@ export function createRenderer(canvas) {
   // ------------------------------------------------------------ frame
   function draw(f, en, dt) {
     time += dt;
+    pumpPrewarm();
     const t = time;
     ctx.setTransform(1, 0, 0, 1, 0, 0);
     let sx = 0, sy = 0;
@@ -547,6 +405,18 @@ export function createRenderer(canvas) {
       ctx.restore();
     }
 
+    // dissolving corpses: melt into the paper as ink
+    for (let i = corpses.length - 1; i >= 0; i--) {
+      const k = corpses[i]; k.life -= dt;
+      if (k.life <= 0) { corpses.splice(i, 1); continue; }
+      const l = k.life / k.max, spr = enemySprite(k.kind, 0, enemyPx(k.kind));
+      ctx.save(); ctx.globalAlpha = l * 0.9; ctx.translate(toX(k.x), toY(k.y));
+      ctx.scale(k.face * (1 + (1 - l) * 0.35), 0.35 + 0.65 * l);
+      ctx.drawImage(l > 0.7 ? flashOf(spr) : spr.c, -spr.ox, -spr.oy);
+      ctx.restore();
+      if (!reduced && R() < dt * 30 && wisps.length < 60) wisps.push({ x: k.x + (R() - 0.5) * 0.06, y: k.y, h: 0.05, life: 0.9, r: (2 + R() * 3) * dpr });
+    }
+
     // shockwaves
     for (let i = rings.length - 1; i >= 0; i--) {
       const r = rings[i]; r.life -= dt;
@@ -568,23 +438,25 @@ export function createRenderer(canvas) {
     const drawEnemy = (i) => {
       const o = i * 11;
       const kind = en[o + 1], x = en[o + 2], y = en[o + 3], hp = en[o + 4], size = en[o + 5], age = en[o + 6], flash = en[o + 7], phase = en[o + 8], boss = en[o + 9], slow = en[o + 10];
-      const X = toX(x), Y = toY(y), px = size * scale * 1.35;
+      const X = toX(x), Y = toY(y), px = enemyPx(kind);
       const fade = Math.min(1, age / 0.6);
       ctx.save();
       ctx.globalAlpha = fade;
-      // shadow
-      ctx.fillStyle = 'rgba(22,20,18,.18)';
-      ctx.beginPath(); ctx.ellipse(X, Y, px * 0.28, px * 0.08, 0, 0, Math.PI * 2); ctx.fill();
-      ctx.translate(X, Y);
+      // soft wash shadow
+      ctx.fillStyle = 'rgba(22,20,18,.2)';
+      const fly = kind === 5 || kind === 6 || kind === 9 || kind === 12;
+      ctx.beginPath(); ctx.ellipse(X, Y, px * (fly ? 0.2 : 0.3), px * 0.075, 0, 0, Math.PI * 2); ctx.fill();
       const face = x > 0 ? -1 : 1;
-      ctx.scale(px / 100 * face, px / 100);
-      const walk = (reduced ? 0 : t * 7 * (slow > 0 ? 0.4 : 1)) + phase;
-      (drawers[kind] || drawers[0])(ctx, reduced ? phase : t, walk);
-      if (flash > 0) { // hit flash: paper-white wash over the silhouette
-        ctx.globalCompositeOperation = 'source-atop';
-        ctx.fillStyle = `rgba(236,230,216,${flash * 5})`; ctx.fillRect(-60, -150, 120, 160);
-        ctx.globalCompositeOperation = 'source-over';
-      }
+      const d = Math.hypot(x, y);
+      const cad = CADENCE[kind] || 6;
+      const melee = d < 0.2;
+      const ph = reduced ? phase : (melee ? t * 3 : t * cad * (slow > 0 ? 0.4 : 1)) + phase;
+      const fr = Math.floor(((((ph / TAU) % 1) + 1) % 1) * FRAMES) % FRAMES;
+      const spr = enemySprite(kind, fr, px);
+      ctx.translate(X + (melee && !reduced ? Math.sin(t * 9 + phase) * px * 0.04 * -Math.sign(x) : 0), Y);
+      ctx.scale(face, 1);
+      if (kind === 6 || kind === 12) ctx.globalAlpha = fade * 0.88;
+      ctx.drawImage(flash > 0 ? flashOf(spr) : spr.c, -spr.ox, -spr.oy);
       ctx.restore();
       // hp bar
       if (hp < 0.999 || boss) {
@@ -603,6 +475,28 @@ export function createRenderer(canvas) {
     }
     if (!asuraDrawn) drawAsura(f, t);
 
+    // ink smoke rising off the Asura
+    if (!reduced && R() < dt * (f[7] > 0 ? 18 : 5) && wisps.length < 60) wisps.push({ x: (R() - 0.5) * 0.1, y: (R() - 0.5) * 0.04, h: 0.02, life: 1.3, r: (2 + R() * 4) * dpr, red: f[8] > 0 && R() < 0.5 });
+    for (let i = wisps.length - 1; i >= 0; i--) {
+      const w = wisps[i]; w.life -= dt; w.h += dt * 0.09; w.x += Math.sin(time * 2 + i) * dt * 0.02;
+      if (w.life <= 0) { wisps.splice(i, 1); continue; }
+      ctx.fillStyle = w.red ? `rgba(179,32,42,${w.life * 0.18})` : `rgba(22,20,18,${w.life * 0.08})`;
+      ctx.beginPath(); ctx.arc(toX(w.x), toY(w.y) - w.h * scale, w.r * (1.8 - w.life), 0, Math.PI * 2); ctx.fill();
+    }
+    // the Asura's strike arcs — a tapered crescent of ink toward the target
+    for (let i = swipes.length - 1; i >= 0; i--) {
+      const sw = swipes[i]; sw.life -= dt;
+      if (sw.life <= 0) { swipes.splice(i, 1); continue; }
+      const ox = cx, oy = cy - 0.17 * scale;
+      const a = Math.atan2(toY(sw.y) - 0.07 * scale - oy, toX(sw.x) - ox);
+      const p = 1 - sw.life / 0.17, rr = 0.15 * scale * (1 + p * 0.5);
+      const span = 1.1, a0 = a - span * (sw.flip ? -1 : 1), a1 = a + span * (sw.flip ? -1 : 1);
+      const pts = [];
+      for (let k = 0; k <= 8; k++) { const q = a0 + (a1 - a0) * Math.min(1, k / 8 * (0.4 + p * 1.2)); pts.push([ox + Math.cos(q) * rr, oy + Math.sin(q) * rr * 0.85]); }
+      ctx.globalAlpha = Math.min(1, sw.life * 9);
+      brush(ctx, pts, 0.8 * dpr, 0.5 * dpr, f[9] > 0 ? 'rgba(179,32,42,.85)' : 'rgba(20,18,16,.8)', 7);
+      ctx.globalAlpha = 1;
+    }
     // slashes
     for (let i = slashes.length - 1; i >= 0; i--) {
       const s = slashes[i]; s.life -= dt;
@@ -633,7 +527,7 @@ export function createRenderer(canvas) {
       p.x += p.vx * dt * 0.5; p.y += p.vy * dt * 0.5; p.vz -= dt * 2.2; p.z = Math.max(0, p.z + p.vz * dt * 0.3);
       if (p.life <= 0) { parts.splice(i, 1); continue; }
       ctx.fillStyle = p.red ? `rgba(179,32,42,${Math.min(1, p.life * 2)})` : `rgba(22,20,18,${Math.min(1, p.life * 2)})`;
-      ctx.beginPath(); ctx.arc(toX(p.x), toY(p.y) - p.z * scale * 0.4 - 0.06 * scale, p.r, 0, Math.PI * 2); ctx.fill();
+      ctx.beginPath(); ctx.ellipse(toX(p.x), toY(p.y) - p.z * scale * 0.4 - 0.06 * scale, p.r * 1.8, p.r * 0.8, Math.atan2(p.vy * SQ - p.vz * 0.4, p.vx), 0, Math.PI * 2); ctx.fill();
     }
     // floating numbers
     ctx.textAlign = 'center'; ctx.textBaseline = 'middle';

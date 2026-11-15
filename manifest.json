@@ -1,0 +1,27 @@
+{
+  "id": "/asura-idle/",
+  "name": "Asura",
+  "short_name": "Asura",
+  "description": "Idle tower defense in sumi-e ink. You are the Asura; ninja, samurai, oni and tengu come from every side. Rust + WebAssembly. Works offline.",
+  "start_url": "/asura-idle/",
+  "scope": "/asura-idle/",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#ece6d8",
+  "theme_color": "#ece6d8",
+  "lang": "en",
+  "dir": "ltr",
+  "categories": ["games", "entertainment"],
+  "icons": [
+    { "src": "assets/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
+    { "src": "assets/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" },
+    { "src": "assets/icon-maskable-192.png", "sizes": "192x192", "type": "image/png", "purpose": "maskable" },
+    { "src": "assets/icon-maskable-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+  ],
+  "screenshots": [
+    { "src": "assets/screens/battle-mobile.jpg", "sizes": "780x1688", "type": "image/jpeg", "form_factor": "narrow", "label": "The Asura holds the centre as foes close in from every side" },
+    { "src": "assets/screens/storm-mobile.jpg", "sizes": "780x1688", "type": "image/jpeg", "form_factor": "narrow", "label": "Wrath Burst blasts every foe in reach" },
+    { "src": "assets/screens/rebirth-mobile.jpg", "sizes": "780x1688", "type": "image/jpeg", "form_factor": "narrow", "label": "Be reborn for red prayer beads" },
+    { "src": "assets/screens/battle-desktop.jpg", "sizes": "1280x800", "type": "image/jpeg", "form_factor": "wide", "label": "A Shogun boss wave with Storm active" }
+  ]
+}
