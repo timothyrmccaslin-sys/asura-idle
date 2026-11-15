@@ -30,7 +30,12 @@ cp /tmp/music/loops.json assets/music/
 
 # Sound effects
 
-All sound effects are original. They are synthesised live in the browser by
+**Punch sample:** `assets/audio/punch.mp3` is a recording supplied by the
+project owner for use in Asura. It was trimmed, loudness-matched and converted
+to mono. It plays for fist and palm hits, with small random pitch and level
+variation. If it can't be loaded, the game falls back to the synthesised punch.
+
+Every other sound effect is original. They are synthesised live in the browser by
 `sfx.js`, using Web Audio oscillators, filtered noise, envelopes and a
 compressor. There are no sample files and no third-party audio, so they are
 project-owned under the same terms as this repo. The same code renders the

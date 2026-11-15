@@ -9,7 +9,7 @@ import { createSfx } from './sfx.js';
 const SAVE_KEY = 'asura-idle-save-v1';
 const PREFS_KEY = 'asura-idle-prefs-v1';
 const AUTOSAVE_MS = 5000;
-const APP_VERSION = '3.5.0'; // keep in step with VERSION in sw.js
+const APP_VERSION = '3.5.1'; // keep in step with VERSION in sw.js
 
 const UPS = {
   damage:   { name: 'Wrath',        desc: 'Raw striking power. Doubles every 25 levels.', f: (v) => fmt(v) },
@@ -382,6 +382,13 @@ function nearBoss(x, y) {
   for (let o = 0; o < en.length; o += 11) if (en[o + 9] > 0 && Math.abs(en[o + 2] - x) < 0.12 && Math.abs(en[o + 3] - y) < 0.12) return true;
   return false;
 }
+// which body part is landing: the painted pose the fighter is in right now
+const KICKS = new Set(['roundhouse', 'crescent', 'tornado', 'sweep', 'hook', 'slam']);
+function strikeKind() {
+  const p = renderer.anim && renderer.anim.pose;
+  const name = p && (p.next && p.mix > 0.5 ? p.next : p.pose);
+  return name && KICKS.has(name) ? 1 : name === 'palm' ? 2 : 0;
+}
 function sounds(ev) {
   if (!sfx.state.on) return;
   for (let i = 0; i < ev.length; i += 6) {
@@ -391,7 +398,7 @@ function sounds(ev) {
         if (c === 3) sfx.play('drop');
         else if (c === 4 || c === 5) sfx.play('hit', { v: 2 }, 0.45);
         else if (b) sfx.play('crit');
-        else if (c !== 2) { if (nearBoss(x, y)) sfx.play('bossHit'); else sfx.play('hit'); }
+        else if (c !== 2) { if (nearBoss(x, y)) sfx.play('bossHit'); else sfx.play('hit', { v: strikeKind() }); }
         break;
       case 2: sfx.play(c ? 'bossDeath' : 'death'); break;
       case 3: sfx.play('whoosh'); break;

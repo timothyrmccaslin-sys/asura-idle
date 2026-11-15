@@ -55,6 +55,12 @@ export const VOICES = {
   whoosh(ctx, out, t) { const d = R(0.16, 0.24); nz(ctx, out, t, d, 'bandpass', R(500, 700), 1.4, d * 0.45, 0.35, R(2200, 3200)); return d; },
   hit(ctx, out, t, o = {}) { // flesh-and-cloth impact; o.v picks punch / kick / palm
     const v = o.v ?? (Math.random() * 3) | 0, p = R(0.88, 1.14);
+    // fist and palm strikes use the owner-supplied punch recording when it is loaded
+    if (v !== 1 && o.buf) {
+      const src = ctx.createBufferSource(); src.buffer = o.buf.buf; src.playbackRate.value = R(0.94, 1.06);
+      const g = ctx.createGain(); g.gain.value = R(0.85, 1.0) * 1.4; src.connect(g); g.connect(out);
+      src.start(t, o.buf.offset); return 0.6;
+    }
     thud(ctx, out, t, [150, 115, 180][v] * p, 52 * p, [0.09, 0.13, 0.07][v], 0.9);
     nz(ctx, out, t, [0.05, 0.07, 0.035][v], 'bandpass', [1400, 900, 2600][v] * p, 1.2, 0.001, [0.55, 0.5, 0.7][v]);
     if (v === 2) nz(ctx, out, t, 0.02, 'highpass', 4000, 0.7, 0.001, 0.3); // palm slap
@@ -180,10 +186,17 @@ const CAP = { hit: 6 };
 export const LEVEL = { whoosh: 1.9, hit: 0.75, crit: 0.63, death: 1.6, bossHit: 0.67, wrath: 0.67, storm: 1.7, zap: 1.3, drop: 1, beads: 1.5, sixarms: 0.8,
   tide: 0.9, rain: 2.4, whirlpool: 2.3, lotus: 1.35, heal: 1.8, buy: 2.7, waveClear: 2.1, bossAppear: 0.7, bossDeath: 0.7, defeat: 0.8, unlock: 2.1 };
 
+// skip codec padding / silence so the recorded punch lands on the frame it is triggered
+export function sampleStart(buf) {
+  const x = buf.getChannelData(0);
+  for (let i = 0; i < x.length; i++) if (Math.abs(x[i]) > 0.004) return Math.max(0, i - 40) / buf.sampleRate;
+  return 0;
+}
+
 export function createSfx({ enabled = true, volume = 0.6 } = {}) {
   let ctx = null, master = null, comp = null, on = enabled, vol = volume, hidden = false;
   const last = {}, live = {};
-  const level = () => (on ? vol * vol * 0.55 : 0); // sits under the music
+  const level = () => (on ? vol * vol * 1.1 : 0); // hits sit just under the music, ability hits level with it
   function unlock() {
     if (ctx) { if (on && !hidden && ctx.state !== 'running') ctx.resume().catch(() => {}); return; }
     const AC = window.AudioContext || window.webkitAudioContext; if (!AC) return;
@@ -192,6 +205,7 @@ export function createSfx({ enabled = true, volume = 0.6 } = {}) {
     master = ctx.createGain(); master.gain.value = level();
     comp.connect(master); master.connect(ctx.destination);
     if (!on) ctx.suspend().catch(() => {});
+    loadPunch();
   }
   for (const ev of ['pointerdown', 'keydown', 'touchend']) window.addEventListener(ev, unlock, { capture: true, passive: true });
   document.addEventListener('visibilitychange', () => {
@@ -199,7 +213,15 @@ export function createSfx({ enabled = true, volume = 0.6 } = {}) {
     if (!ctx) return;
     if (hidden) ctx.suspend().catch(() => {}); else if (on) ctx.resume().catch(() => {});
   });
-  const stats = { played: 0, dropped: 0 };
+  const stats = { played: 0, dropped: 0, punch: 'pending' };
+  let punch = null; // { buf, offset } decoded from assets/audio/punch.mp3
+  async function loadPunch() {
+    try {
+      const ab = await (await fetch('assets/audio/punch.mp3')).arrayBuffer();
+      const buf = await new Promise((res, rej) => { const p = ctx.decodeAudioData(ab, res, rej); if (p && p.catch) p.catch(rej); });
+      punch = { buf, offset: sampleStart(buf) }; stats.punch = 'sample';
+    } catch (e) { stats.punch = 'synth'; console.warn('punch sample unavailable, using synthesised hit', e); }
+  }
   function play(name, o, gain = 1) {
     if (!ctx || !on || hidden || ctx.state !== 'running') return false;
     const v = VOICES[name]; if (!v) return false;
@@ -209,7 +231,9 @@ export function createSfx({ enabled = true, volume = 0.6 } = {}) {
     if (cls) { const l = (live[cls] = (live[cls] || []).filter((e) => e > now)); if (l.length >= CAP[cls]) { stats.dropped++; return false; } }
     last[name] = now;
     const g = ctx.createGain(); g.gain.value = (LEVEL[name] ?? 1) * gain; g.connect(comp);
-    const d = v(ctx, g, now + 0.005, o || {});
+    o = o || {};
+    if (name === 'hit' && punch && o.v !== 1) o = { ...o, buf: punch };
+    const d = v(ctx, g, now + 0.005, o);
     setTimeout(() => g.disconnect(), (d + 0.5) * 1000);
     if (cls) live[cls].push(now + Math.min(d, 0.25));
     stats.played++;
